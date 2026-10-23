@@ -175,7 +175,7 @@ sequenceDiagram
     API-->>D: route appears (GET /routes/mine)
     D->>D: Navigate / open the whole route in Google Maps
     D->>API: start and complete jobs
-    API-->>S: progress follows the jobs; route closes itself
+    API-->>S: progress follows the jobs, route closes itself
 ```
 
 - Only jobs **already assigned to a driver** can be put on a route, and a route cannot mix drivers (the error names them).
