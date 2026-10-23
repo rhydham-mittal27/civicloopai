@@ -54,7 +54,7 @@ def report(client, headers, text="Overflowing bins near the market", lat=30.7333
     )
     assert r.status_code == 201, r.text
     incident_id = r.json()["id"]
-    up = client.post(f"/api/v1/incidents/{incident_id}/media", headers=headers, files={"file": ("a.jpg", b"before-photo", "image/jpeg")})
+    up = client.post(f"/api/v1/incidents/{incident_id}/media", headers=headers, files={"file": ("a.jpg", b"\xff\xd8\xffbefore-photo", "image/jpeg")})
     assert up.status_code == 201, up.text
     return incident_id
 
@@ -76,12 +76,17 @@ def test_full_cleanup_loop(world):
     assert client.post(f"/api/v1/incidents/{incident_id}/work-orders", headers=h["supervisor"], json={"priority": 1}).status_code == 400
     assert client.post(f"/api/v1/work-orders/{order['id']}/approve", headers=h["supervisor"]).json()["status"] == "approved"
 
-    # Routes: built for approved orders, with an honest baseline.
+    # A route needs the job assigned to a driver first.
+    assert client.post("/api/v1/routes", headers=h["supervisor"], json={"work_order_ids": [order["id"]], "vehicle_capacity": 10}).status_code == 400
+    assert client.post(f"/api/v1/work-orders/{order['id']}/assign", headers=h["supervisor"], json={"worker_id": worker_id}).json()["status"] == "assigned"
+
+    # Routes: built for that driver's jobs, with an honest baseline. Approving sends it to them.
     route = client.post("/api/v1/routes", headers=h["supervisor"], json={"work_order_ids": [order["id"]], "vehicle_capacity": 10})
-    assert route.status_code == 201 and len(route.json()["stops"]) == 1
+    assert route.status_code == 201 and len(route.json()["stops"]) == 1 and route.json()["worker_id"] == worker_id
+    assert client.get("/api/v1/routes/mine", headers=h["worker"]).json() == []  # a draft is not shown to the driver
     assert client.post(f"/api/v1/routes/{route.json()['id']}/approve", headers=h["supervisor"]).json()["approved_by"]
     assert client.post(f"/api/v1/routes/{route.json()['id']}/approve", headers=h["supervisor"]).status_code == 400
-    assert client.post(f"/api/v1/work-orders/{order['id']}/assign", headers=h["supervisor"], json={"worker_id": worker_id}).json()["status"] == "assigned"
+    assert [r["id"] for r in client.get("/api/v1/routes/mine", headers=h["worker"]).json()] == [route.json()["id"]]
 
 
     # The worker sees only their own order and moves it along.
@@ -92,9 +97,9 @@ def test_full_cleanup_loop(world):
     assert client.post(f"/api/v1/work-orders/{order['id']}/complete", headers=h["worker"]).json()["status"] == "completed"
 
     # After photo: a copy of the before photo cannot auto-verify, a new one can.
-    same = client.post(f"/api/v1/incidents/{incident_id}/verification", headers=h["worker"], files={"file": ("a.jpg", b"before-photo", "image/jpeg")})
+    same = client.post(f"/api/v1/incidents/{incident_id}/verification", headers=h["worker"], files={"file": ("a.jpg", b"\xff\xd8\xffbefore-photo", "image/jpeg")})
     assert same.json()["status"] == "uncertain"
-    good = client.post(f"/api/v1/incidents/{incident_id}/verification", headers=h["worker"], files={"file": ("b.jpg", b"clean-street", "image/jpeg")}, data={"notes": "all clear"})
+    good = client.post(f"/api/v1/incidents/{incident_id}/verification", headers=h["worker"], files={"file": ("b.jpg", b"\xff\xd8\xffclean-street", "image/jpeg")}, data={"notes": "all clear"})
     assert good.json()["status"] == "verified"
     assert client.get(f"/api/v1/incidents/{incident_id}", headers=h["resident"]).json()["status"] == "verified"
 
@@ -120,7 +125,7 @@ def test_role_boundaries(world):
     assert client.get(f"/api/v1/incidents/{incident_id}", headers=h["other"]).status_code == 404
     assert client.get("/api/v1/incidents", headers=h["other"]).json() == []
     assert len(client.get("/api/v1/incidents", headers=h["resident"]).json()) == 1
-    assert client.post(f"/api/v1/incidents/{incident_id}/media", headers=h["other"], files={"file": ("a.jpg", b"x", "image/jpeg")}).status_code == 404
+    assert client.post(f"/api/v1/incidents/{incident_id}/media", headers=h["other"], files={"file": ("a.jpg", b"\xff\xd8\xffx", "image/jpeg")}).status_code == 404
 
     forbidden = [
         ("get", "/api/v1/queue", "resident"),
@@ -148,7 +153,7 @@ def test_role_boundaries(world):
     # Sidebar badges: each role sees the count of what is waiting for them.
     assert client.get("/api/v1/me/badges", headers=h["resident"]).json() == {"incidents": 1}
     assert client.get("/api/v1/me/badges", headers=h["supervisor"]).json() == {"incidents": 1, "work": 0, "routes": 0}
-    assert client.get("/api/v1/me/badges", headers=h["worker"]).json() == {"work": 0}
+    assert client.get("/api/v1/me/badges", headers=h["worker"]).json() == {"work": 0, "routes": 0}
 
     # Admins manage accounts, but never their own role.
     assert client.patch(f"/api/v1/users/{admin_id}", headers=h["admin"], json={"role": "reporter"}).status_code == 400

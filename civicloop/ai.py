@@ -99,7 +99,14 @@ class GeminiAdapter:
                 raise AIAdapterError(
                     "Install the ai extra to use GeminiAdapter"
                 ) from error
-            client = genai.Client(api_key=api_key or os.environ.get("GEMINI_API_KEY"))
+            key = api_key or os.environ.get("GEMINI_API_KEY")
+            try:
+                from google.genai import types as genai_types
+
+                # without a time limit one stalled connection would hold the worker thread forever
+                client = genai.Client(api_key=key, http_options=genai_types.HttpOptions(timeout=30_000))
+            except (ImportError, AttributeError, TypeError):
+                client = genai.Client(api_key=key)
         self.client = client
 
     def analyze(self, payload: dict[str, Any]) -> dict[str, Any]:

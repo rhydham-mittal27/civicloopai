@@ -78,6 +78,15 @@ async function snap(page, group, name, url, after) {
   const { page, ctx } = await session("worker");
   await snap(page, "02-worker", "incidents", "/incidents");
   await snap(page, "02-worker", "my-assignments", "/work");
+  // the phone gets its own vehicle: two sources moving one vehicle would fight, and the server would drop the jumps
+  const supToken = await token("supervisor");
+  const workers = await get("supervisor", "/users?role=sanitation_worker");
+  await fetch(`${API}/vehicles`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${supToken}` }, body: JSON.stringify({ label: "Crew phone truck", driver_id: workers[0].id }) });
+  await snap(page, "02-worker", "sharing-location", "/work", async (p) => {
+    if (await p.locator("#share-vehicle").count()) await p.locator("#share-vehicle").selectOption({ label: "Crew phone truck" });
+    await p.getByRole("button", { name: "Start sharing" }).click();
+    await p.getByText(/^Sent at /).waitFor({ timeout: 20000 });
+  });
   await ctx.close();
 }
 
@@ -91,6 +100,12 @@ async function snap(page, group, name, url, after) {
   if (verified) await snap(page, "03-supervisor", "incident-detail-verified", `/incidents/${verified.id}`);
   await snap(page, "03-supervisor", "work-orders", "/work");
   await snap(page, "03-supervisor", "routes-planner", "/routes");
+  await snap(page, "03-supervisor", "live-fleet", "/fleet", async (p) => p.locator("g.vehicle").first().waitFor({ timeout: 15000 }));
+  await snap(page, "03-supervisor", "live-fleet-selected", "/fleet", async (p) => {
+    await p.locator("g.vehicle").first().waitFor({ timeout: 15000 });
+    await p.locator(".fleet-item").first().click();
+    await p.waitForTimeout(2500);
+  });
   if (routes[0]) await snap(page, "03-supervisor", "route-detail", `/routes/${routes[0].id}`);
   await snap(page, "03-supervisor", "insights-evaluations", "/insights");
   for (const tab of ["Pilots", "Models"]) {
@@ -118,6 +133,7 @@ async function snap(page, group, name, url, after) {
   await snap(page, "05-phone", "incidents", "/incidents");
   await snap(page, "05-phone", "report-an-incident", "/incidents/new");
   await snap(page, "05-phone", "routes-planner", "/routes");
+  await snap(page, "05-phone", "live-fleet", "/fleet", async (p) => p.locator("g.vehicle").first().waitFor({ timeout: 15000 }));
   await ctx.close();
 }
 

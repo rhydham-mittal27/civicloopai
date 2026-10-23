@@ -10,6 +10,7 @@ import logging
 import os
 import threading
 import time
+from datetime import timedelta
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -17,7 +18,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from civicloop.ai import AnalysisAdapter
 from civicloop.container import build_services
 from civicloop.job_handlers import ServiceJobHandlerFactory
-from civicloop.jobs import JobQueue, JobWorker
+from civicloop.jobs import STALE_AFTER, JobQueue, JobWorker, utc_now
+from civicloop.repositories import JobRepository
 from civicloop.services.municipal_integration import ManualMunicipalAdapter
 from civicloop.storage import ObjectStorageAdapter
 
@@ -38,6 +40,27 @@ def make_worker(
     return JobWorker(session_factory, queue, handlers)
 
 
+RECOVER_EVERY_SECONDS = 60
+
+
+def recover_jobs(worker: JobWorker) -> int:
+    """Put jobs back in the queue that a crash left behind: ones stuck RUNNING, and ones saved but never queued.
+
+    Safe to repeat: a job already queued, running or finished is skipped when its extra delivery arrives."""
+    try:
+        with worker.session_factory() as session:
+            repo = JobRepository(session)
+            ids = repo.reclaim_stale(utc_now() - STALE_AFTER)
+            ids += [job_id for job_id in repo.queued_ids() if job_id not in ids]
+            session.commit()
+        for job_id in ids:
+            worker.queue.enqueue(job_id)
+        return len(ids)
+    except Exception:
+        logger.exception("job recovery failed")
+        return 0
+
+
 class WorkerThread:
     def __init__(self, worker: JobWorker, idle_seconds: float = 0.5) -> None:
         self.worker = worker
@@ -53,7 +76,11 @@ class WorkerThread:
         self._thread.join(timeout=5)
 
     def _run(self) -> None:
+        next_recovery = 0.0
         while not self._stop.is_set():
+            if time.monotonic() >= next_recovery:
+                recover_jobs(self.worker)
+                next_recovery = time.monotonic() + RECOVER_EVERY_SECONDS
             try:
                 did_work = self.worker.run_once()
             except Exception:  # keep the loop alive; the job row records the failure
@@ -74,7 +101,11 @@ def main() -> None:  # pragma: no cover - process entry point
     factory: Any = create_analysis_adapter_from_env if os.getenv("CIVICLOOP_AI_PROVIDER") else None
     worker = make_worker(create_session_factory(engine), create_queue_from_env(), create_storage_from_env(), factory)
     logger.warning("civicloop worker started")
+    next_recovery = 0.0
     while True:
+        if time.monotonic() >= next_recovery:
+            recover_jobs(worker)
+            next_recovery = time.monotonic() + RECOVER_EVERY_SECONDS
         if not worker.run_once():
             time.sleep(1)
 

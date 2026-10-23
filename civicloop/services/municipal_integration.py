@@ -14,6 +14,15 @@ class MunicipalAdapter(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
+# What an outside system may report. Approval, assignment and completion proof stay with this app's own flows.
+IMPORTABLE: dict[WorkOrderStatus, set[WorkOrderStatus]] = {
+    WorkOrderStatus.ASSIGNED: {WorkOrderStatus.IN_PROGRESS, WorkOrderStatus.CANCELLED},
+    WorkOrderStatus.IN_PROGRESS: {WorkOrderStatus.COMPLETED, WorkOrderStatus.CANCELLED},
+    WorkOrderStatus.APPROVED: {WorkOrderStatus.CANCELLED},
+    WorkOrderStatus.DRAFT: {WorkOrderStatus.CANCELLED},
+}
+
+
 class MunicipalIntegrationService:
     def __init__(
         self, work_orders: WorkOrderRepository, users, audit: AuditEventRepository
@@ -68,9 +77,12 @@ class MunicipalIntegrationService:
             if order is None:
                 continue
             try:
-                order.status = WorkOrderStatus(update["status"])
+                new_status = WorkOrderStatus(update["status"])
             except ValueError:
                 continue
+            if new_status not in IMPORTABLE.get(order.status, set()):
+                continue  # not a move the work flow allows from where the order is now
+            order.status = new_status
             imported += 1
             record_audit(
                 self.audit,

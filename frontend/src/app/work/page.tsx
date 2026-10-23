@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { MyRoute } from "@/components/MyRoute";
+import { ShareLocation } from "@/components/ShareLocation";
 import { Empty, ErrorNote, Loading, OrderBadge, PageHead, Spinner, formatWhen, shortId } from "@/components/ui";
 import { STAFF } from "@/lib/access";
 import { api, ORDER_LABEL, type WorkOrder, type WorkOrderStatus } from "@/lib/api";
@@ -39,6 +41,9 @@ function Work() {
       <PageHead title={supervisor ? "Work orders" : "My assignments"}>
         {supervisor ? "Approve, assign and follow every cleanup job." : "Cleanups assigned to you. Open one to start work and send evidence."}
       </PageHead>
+
+      {principal?.role === "sanitation_worker" && <MyRoute />}
+      {principal?.role === "sanitation_worker" && <ShareLocation />}
 
       <div className="tabs" role="tablist" aria-label="Work order status">
         {FILTERS.map((status) => (

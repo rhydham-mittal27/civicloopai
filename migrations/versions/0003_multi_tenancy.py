@@ -39,8 +39,16 @@ def upgrade() -> None:
     pilot_id = str(uuid.uuid4())
     existing = connection.execute(sa.text("SELECT id FROM tenants WHERE slug = 'chandigarh'")).scalar()
     if existing is None:
+        # on a database built by 0001 from today's models the table already has `verified` (not null); on an older one it does not
+        has_verified = "verified" in {c["name"] for c in inspect(connection).get_columns("tenants")}
         connection.execute(
-            sa.text("INSERT INTO tenants (id, name, slug, state, is_active) VALUES (:id, 'Chandigarh', 'chandigarh', 'Chandigarh', :t)"),
+            sa.text(
+                "INSERT INTO tenants (id, name, slug, state, is_active"
+                + (", verified" if has_verified else "")
+                + ") VALUES (:id, 'Chandigarh', 'chandigarh', 'Chandigarh', :t"
+                + (", :t" if has_verified else "")
+                + ")"
+            ),
             {"id": pilot_id, "t": True},
         )
     else:

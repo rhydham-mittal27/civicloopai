@@ -220,6 +220,8 @@ def test_ml_endpoints_and_route_details_over_http(tmp_path, monkeypatch):
         admin = account("admin", "admin@x.test")
         supervisor = account("supervisor", "sup@x.test", admin)
         resident = account("reporter", "res@x.test")
+        driver = account("sanitation_worker", "drv@x.test", admin)
+        driver_id = client.get("/api/v1/auth/me", headers=driver).json()["id"]
 
         assert client.get("/api/v1/ml/status", headers=resident).status_code == 403
         status = client.get("/api/v1/ml/status", headers=supervisor).json()
@@ -232,7 +234,7 @@ def test_ml_endpoints_and_route_details_over_http(tmp_path, monkeypatch):
 
         # A scored report reports which method scored it.
         r = client.post("/api/v1/incidents", headers=resident, json={"reporter_type": "resident", "description": "Overflowing bins", "latitude": 30.7333, "longitude": 76.7794, "occurred_at": datetime.now(timezone.utc).isoformat()}).json()
-        client.post(f"/api/v1/incidents/{r['id']}/media", headers=resident, files={"file": ("a.jpg", b"x", "image/jpeg")})
+        client.post(f"/api/v1/incidents/{r['id']}/media", headers=resident, files={"file": ("a.jpg", b"\xff\xd8\xffx", "image/jpeg")})
         client.post(f"/api/v1/incidents/{r['id']}/analysis", headers=supervisor)
         risk = client.get(f"/api/v1/incidents/{r['id']}/risk", headers=supervisor).json()
         assert risk["kind"] == "formula" and risk["method"] == "hand-set formula"
@@ -241,10 +243,11 @@ def test_ml_endpoints_and_route_details_over_http(tmp_path, monkeypatch):
         orders = []
         for i in range(4):
             inc = client.post("/api/v1/incidents", headers=resident, json={"reporter_type": "resident", "description": f"Pile {i}", "latitude": 30.70 + i * 0.01, "longitude": 76.77, "occurred_at": datetime.now(timezone.utc).isoformat()}).json()
-            client.post(f"/api/v1/incidents/{inc['id']}/media", headers=resident, files={"file": ("a.jpg", b"x", "image/jpeg")})
+            client.post(f"/api/v1/incidents/{inc['id']}/media", headers=resident, files={"file": ("a.jpg", b"\xff\xd8\xffx", "image/jpeg")})
             client.post(f"/api/v1/incidents/{inc['id']}/analysis", headers=supervisor)
             order = client.post(f"/api/v1/incidents/{inc['id']}/work-orders", headers=supervisor, json={"priority": 10 * i, "estimated_volume": 1}).json()
             client.post(f"/api/v1/work-orders/{order['id']}/approve", headers=supervisor)
+            client.post(f"/api/v1/work-orders/{order['id']}/assign", headers=supervisor, json={"worker_id": driver_id})
             orders.append(order["id"])
         route = client.post("/api/v1/routes", headers=supervisor, json={"work_order_ids": orders, "vehicle_capacity": 10, "max_duration_minutes": 600})
         assert route.status_code == 201, route.text

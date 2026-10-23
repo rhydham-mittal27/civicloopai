@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Generic, TypeVar
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
 from sqlalchemy.orm import Session
 
 from civicloop.models import (
@@ -40,6 +41,10 @@ class BaseRepository(Generic[ModelT]):
 
     def get(self, entity_id: str) -> ModelT | None:
         return self.session.get(self.model, entity_id)
+
+    def get_locked(self, entity_id: str) -> ModelT | None:
+        """Read a row and hold it until commit, so two people changing it take turns (Postgres; SQLite locks the file)."""
+        return self.session.get(self.model, entity_id, with_for_update=True)
 
     def add(self, entity: ModelT) -> ModelT:
         self.session.add(entity)
@@ -293,15 +298,36 @@ class RoutePlanRepository(BaseRepository[RoutePlan]):
         if plan is None:
             raise LookupError(f"Route plan not found: {route_plan_id}")
         plan.approved_by = user_id
+        plan.approved_at = datetime.now(timezone.utc)
         self.session.flush()
         return plan
+
+    def approved_for_worker(self, worker_id: str, limit: int = 20) -> Sequence[RoutePlan]:
+        """The routes a supervisor has approved for this driver, newest first. Unapproved drafts are never included."""
+        statement = (
+            select(RoutePlan)
+            .where(RoutePlan.worker_id == worker_id, RoutePlan.approved_by.is_not(None))
+            .order_by(desc(RoutePlan.approved_at), desc(RoutePlan.created_at))
+            .limit(limit)
+        )
+        return self.session.scalars(statement).all()
+
+    def approved_plan_for_orders(self, work_order_ids: list[str], exclude_plan_id: str) -> RoutePlan | None:
+        """An already-approved route that holds any of these jobs, if there is one."""
+        statement = (
+            select(RoutePlan)
+            .join(RouteStop, RouteStop.route_plan_id == RoutePlan.id)
+            .where(RouteStop.work_order_id.in_(work_order_ids), RoutePlan.approved_by.is_not(None), RoutePlan.id != exclude_plan_id)
+            .limit(1)
+        )
+        return self.session.scalars(statement).first()
 
     def stops_for(self, route_plan_id: str) -> Sequence[RouteStop]:
         statement = select(RouteStop).where(RouteStop.route_plan_id == route_plan_id).order_by(RouteStop.sequence)
         return self.session.scalars(statement).all()
 
-    def list_all(self) -> Sequence[RoutePlan]:
-        return self.session.scalars(select(RoutePlan).order_by(desc(RoutePlan.created_at))).all()
+    def list_all(self, limit: int = 100) -> Sequence[RoutePlan]:
+        return self.session.scalars(select(RoutePlan).order_by(desc(RoutePlan.created_at)).limit(limit)).all()
 
 
 class AuditEventRepository(BaseRepository[AuditEvent]):
@@ -333,8 +359,8 @@ class AuditEventRepository(BaseRepository[AuditEvent]):
 class EvaluationRunRepository(BaseRepository[EvaluationRun]):
     model = EvaluationRun
 
-    def list_all(self) -> Sequence[EvaluationRun]:
-        return self.session.scalars(select(EvaluationRun).order_by(desc(EvaluationRun.created_at))).all()
+    def list_all(self, limit: int = 100) -> Sequence[EvaluationRun]:
+        return self.session.scalars(select(EvaluationRun).order_by(desc(EvaluationRun.created_at)).limit(limit)).all()
 
 
 class SensorReadingRepository(BaseRepository[SensorReading]):
@@ -392,6 +418,35 @@ class JobRepository(BaseRepository[Job]):
         job.started_at = started_at
         self.session.flush()
         return job
+
+    def claim(self, job: Job, started_at) -> bool:
+        """Take a queued job for this worker. False when another worker got there first."""
+        taken = self.session.execute(
+            update(Job)
+            .where(Job.id == job.id, Job.status == JobStatus.QUEUED)
+            .values(status=JobStatus.RUNNING, attempt_count=Job.attempt_count + 1, started_at=started_at)
+        ).rowcount
+        if taken:
+            self.session.refresh(job)
+        return bool(taken)
+
+    def reclaim_stale(self, older_than) -> list[str]:
+        """Jobs whose worker died while running them go back in the queue; none runs forever."""
+        ids: list[str] = []
+        for job in self.session.scalars(select(Job).where(Job.status == JobStatus.RUNNING, Job.started_at < older_than)):
+            if job.attempt_count >= job.max_attempts:
+                job.status = JobStatus.DEAD_LETTER
+                job.last_error_code = "worker_lost"
+                job.last_error_message = "The worker stopped while running this job"
+            else:
+                job.status = JobStatus.QUEUED
+                ids.append(job.id)
+        self.session.flush()
+        return ids
+
+    def queued_ids(self, limit: int = 1000) -> list[str]:
+        statement = select(Job.id).where(Job.status == JobStatus.QUEUED).order_by(Job.created_at).limit(limit)
+        return list(self.session.scalars(statement))
 
     def mark_succeeded(self, job: Job, result: dict, completed_at) -> Job:
         job.status = JobStatus.SUCCEEDED

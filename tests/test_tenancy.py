@@ -66,7 +66,7 @@ def report(client, headers, text="Overflowing bins near the market", pincode=Non
     r = client.post("/api/v1/incidents", headers=headers, json=body)
     assert r.status_code == 201, r.text
     incident = r.json()
-    up = client.post(f"/api/v1/incidents/{incident['id']}/media", headers=headers, files={"file": ("a.jpg", b"photo", "image/jpeg")})
+    up = client.post(f"/api/v1/incidents/{incident['id']}/media", headers=headers, files={"file": ("a.jpg", b"\xff\xd8\xffphoto", "image/jpeg")})
     assert up.status_code == 201, up.text
     return incident
 
@@ -235,6 +235,10 @@ def test_a_misspelt_city_can_be_merged_into_the_real_one(platform):
     typo = client.post("/api/v1/auth/register", json={"name": "T", "email": "t@x.test", "password": PASSWORD, "city": "Punee", "pincode": "411002"})
     assert typo.status_code == 201 and typo.json()["city_verified"] is False
     rows = {r["name"]: r for r in client.get("/api/v1/platform/cities", headers=root).json()}
+    # a city still in use cannot be merged: switch it off first so nothing is written while its records move
+    live = client.post(f"/api/v1/platform/cities/{rows['Punee']['id']}/merge", headers=root, json={"into_id": rows["Pune"]["id"]})
+    assert live.status_code == 409 and "Disable the city first" in live.json()["detail"]
+    assert client.patch(f"/api/v1/platform/cities/{rows['Punee']['id']}", headers=root, json={"is_active": False}).status_code == 200
     merged = client.post(f"/api/v1/platform/cities/{rows['Punee']['id']}/merge", headers=root, json={"into_id": rows["Pune"]["id"]})
     assert merged.status_code == 200 and merged.json()["users"] == 4
     assert "Punee" not in {r["name"] for r in client.get("/api/v1/platform/cities", headers=root).json()}
@@ -251,3 +255,14 @@ def test_disabling_a_city_locks_its_people_out(platform):
     assert client.get("/api/v1/incidents", headers=w["a"]["resident"]).status_code == 200
     own = next(r for r in client.get("/api/v1/platform/cities", headers=root).json() if r["name"] == "Chandigarh")
     assert client.patch(f"/api/v1/platform/cities/{own['id']}", headers=root, json={"is_active": False}).status_code == 400
+
+
+def test_a_city_is_never_left_without_an_administrator(platform):
+    client, w, root = platform
+    pune = next(r for r in client.get("/api/v1/platform/cities", headers=root).json() if r["name"] == "Pune")
+    inside = {**root, "X-Tenant-Id": pune["id"]}
+    admins = [u for u in client.get("/api/v1/users", headers=inside).json() if u["role"] == "admin"]
+    assert len(admins) == 1
+    for change in ({"role": "reporter"}, {"is_active": False}):
+        refused = client.patch(f"/api/v1/users/{admins[0]['id']}", headers=inside, json=change)
+        assert refused.status_code == 400 and "at least one active administrator" in refused.json()["detail"]

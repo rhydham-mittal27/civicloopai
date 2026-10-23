@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import logging
 import os
 import secrets
+import time
+from collections import defaultdict, deque
 from collections.abc import Generator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from civicloop.ai import AIAdapterError, create_analysis_adapter_from_env
@@ -23,21 +27,60 @@ from civicloop.auth import (
 )
 from civicloop.container import build_services
 from civicloop.embeddings import warm_up_in_background
-from civicloop.db import create_engine, create_session_factory, init_db
-from civicloop.jobs import InMemoryJobQueue, JobDispatcher, JobQueue, create_queue_from_env
-from civicloop.models import Incident, IncidentStatus, ReporterType, User, UserRole
+from civicloop.db import assert_schema_current, create_engine, create_session_factory, init_db
+from civicloop.images import sniff_image
+from civicloop.jobs import InMemoryJobQueue, JobDispatcher, JobQueue, as_utc, create_queue_from_env
+from civicloop.models import AnalysisResult, Incident, IncidentStatus, ReporterType, RiskAssessment, User, UserRole
 from civicloop.repositories import IncidentRepository, JobRepository, UserRepository
 from civicloop.routes_fleet import build_fleet_router
 from civicloop.routes_ops import Ctx, build_ops_router
 from civicloop.services.analysis import AnalysisAdapter
 from civicloop.services.common import NotFoundError, PermissionDeniedError, ServiceError
-from civicloop.storage import ObjectStorageAdapter, StorageError, create_storage_from_env
+from civicloop.storage import InMemoryObjectStorage, ObjectStorageAdapter, StorageError, create_storage_from_env
 from civicloop.synthetic import SYNTHETIC_LIKE
-from civicloop.tenancy import bind_tenant, get_or_create_tenant, normalise_pincode, platform_admin_emails
+from civicloop.tenancy import REQUEST_KEY, bind_tenant, get_or_create_tenant, normalise_pincode, platform_admin_emails
 from civicloop.models import Tenant
 from civicloop.worker import WorkerThread, make_worker
 
+logger = logging.getLogger("civicloop.api")
+
 STAFF_ROLES = {UserRole.SUPERVISOR, UserRole.ADMIN, UserRole.SANITATION_WORKER}
+MAX_PHOTOS_PER_INCIDENT = 8
+
+
+class AttemptLimiter:
+    """Allow `limit` hits per key in `window` seconds. Held in this process: use a shared store if you run several."""
+
+    def __init__(self, limit: int, window: int) -> None:
+        self.limit, self.window = limit, window
+        self.hits: dict[str, deque[float]] = defaultdict(deque)
+
+    def _trim(self, key: str) -> deque[float]:
+        now, queue = time.monotonic(), self.hits[key]
+        while queue and now - queue[0] > self.window:
+            queue.popleft()
+        if not queue:
+            self.hits.pop(key, None)
+            queue = self.hits[key]
+        return queue
+
+    def check(self, key: str) -> None:
+        if len(self._trim(key)) >= self.limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many attempts. Wait a few minutes and try again.",
+                headers={"Retry-After": str(self.window)},
+            )
+
+    def hit(self, key: str) -> None:
+        self._trim(key).append(time.monotonic())
+
+    def clear(self, key: str) -> None:
+        self.hits.pop(key, None)
+
+
+def client_address(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
 
 # What a supervisor may set by hand. Approval, progress and verification only happen through
 # their own flows (work orders, workers, evidence review) so a status cannot be faked.
@@ -50,7 +93,7 @@ MANUAL_TRANSITIONS: dict[IncidentStatus, set[IncidentStatus]] = {
 class RegisterRequest(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     email: str = Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-    password: str = Field(min_length=12)
+    password: str = Field(min_length=12, max_length=256)
     role: UserRole = UserRole.REPORTER
     city: str = Field(min_length=2, max_length=120)
     state: str | None = Field(default=None, max_length=100)
@@ -58,17 +101,25 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(max_length=320)
+    password: str = Field(max_length=256)
 
 
 class IncidentCreateRequest(BaseModel):
     reporter_type: ReporterType
-    description: str = Field(min_length=1)
+    description: str = Field(min_length=1, max_length=4000)
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     occurred_at: datetime
     pincode: str | None = Field(default=None, max_length=10)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _utc_and_not_in_the_future(cls, value: datetime) -> datetime:
+        value = value if value.tzinfo else value.replace(tzinfo=timezone.utc)  # no zone given: read it as UTC
+        if value > datetime.now(timezone.utc) + timedelta(minutes=5):
+            raise ValueError("occurred_at cannot be in the future")
+        return value
 
 
 class StatusRequest(BaseModel):
@@ -128,13 +179,23 @@ def create_app(
     session_factory = create_session_factory(engine)
     storage = storage or create_storage_from_env()
     queue = queue or create_queue_from_env()
+    production = os.getenv("CIVICLOOP_ENV", "development").lower() == "production"
+    if production:
+        # these two default to memory for development; in production they would silently lose photos and jobs on restart
+        if isinstance(storage, InMemoryObjectStorage):
+            raise ValueError("Set CIVICLOOP_STORAGE_BACKEND to local or s3 in production: in-memory storage loses every photo on restart")
+        if isinstance(queue, InMemoryJobQueue):
+            raise ValueError("Set CIVICLOOP_QUEUE_BACKEND=redis in production and run `python -m civicloop.worker`: an in-memory queue loses jobs on restart")
+    login_limiter = AttemptLimiter(int(os.getenv("CIVICLOOP_LOGIN_ATTEMPTS", "8")), 300)
+    register_limiter = AttemptLimiter(int(os.getenv("CIVICLOOP_REGISTER_LIMIT", "60")), 3600)
     if analysis_adapter_factory is None and os.getenv("CIVICLOOP_AI_PROVIDER"):
         analysis_adapter_factory = create_analysis_adapter_from_env
     secret = auth_secret or os.getenv("CIVICLOOP_AUTH_SECRET")
     if not secret:
-        if os.getenv("CIVICLOOP_ENV", "development").lower() == "production":
+        if production:
             raise ValueError("CIVICLOOP_AUTH_SECRET must be configured in production with at least 32 characters")
         # Development: a fresh random secret per process, never a published constant.
+        logger.warning("CIVICLOOP_AUTH_SECRET is not set: using a random secret for this process, so sign-ins end when it restarts")
         secret = secrets.token_urlsafe(48)
     # Sign-in lasts 12 hours by default (a working shift); CIVICLOOP_TOKEN_TTL_SECONDS changes it.
     authenticator = TokenAuthenticator(secret, ttl_seconds=int(os.getenv("CIVICLOOP_TOKEN_TTL_SECONDS", str(12 * 3600))))
@@ -145,7 +206,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        init_db(engine)
+        if production:
+            assert_schema_current(engine)  # run `alembic upgrade head` first; creating tables here would hide a missing column
+        else:
+            init_db(engine)
         warm_up_in_background()  # loads the embedding model off the request path (no-op when disabled)
         if worker_thread is not None:
             worker_thread.start()
@@ -174,6 +238,8 @@ def create_app(
         user = session.get(User, token.user_id)
         if user is None or not user.is_active:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is not active")
+        if token.token_version != (user.token_version or 0):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This sign-in has ended. Sign in again.")
         home = session.get(Tenant, user.tenant_id)
         if home is None or not home.is_active:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This city's account has been disabled")
@@ -186,7 +252,8 @@ def create_app(
             if target is None:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot act in another city")
             tenant_id = target.id
-        # From here on every query in this request is limited to one city.
+        # From here on every query in this request is limited to one city, and the scope cannot be dropped by accident.
+        session.info[REQUEST_KEY] = True
         bind_tenant(session, tenant_id)
         return AuthPrincipal(user.id, user.role, token.expires_at, tenant_id, is_platform)
 
@@ -204,12 +271,13 @@ def create_app(
     def list_tenants(q: str = "", session: Session = Depends(get_session)) -> list[dict[str, str | None]]:
         """Suggest verified cities while someone types. Needs two letters and returns a handful of names,
         so the public list cannot be dumped or used to learn which cities exist."""
-        needle = q.strip()
+        needle = q.strip()[:60]
         if len(needle) < 2:
             return []
+        escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = session.scalars(
             select(Tenant)
-            .where(Tenant.is_active.is_(True), Tenant.verified.is_(True), Tenant.slug != "default", Tenant.name.ilike(f"{needle}%"))
+            .where(Tenant.is_active.is_(True), Tenant.verified.is_(True), Tenant.slug != "default", Tenant.name.ilike(f"{escaped}%", escape="\\"))
             .order_by(Tenant.name)
             .limit(8)
         )
@@ -217,6 +285,8 @@ def create_app(
 
     @app.post("/api/v1/auth/register", status_code=201)
     def register(payload: RegisterRequest, request: Request, session: Session = Depends(get_session)) -> dict[str, Any]:
+        register_limiter.check(client_address(request))
+        register_limiter.hit(client_address(request))
         users = UserRepository(session)
         email = payload.email.strip().lower()
         if users.get_by_email(email) is not None:
@@ -234,13 +304,21 @@ def create_app(
             except AuthenticationError:
                 caller_admin = None
 
+        if email in platform_admin_emails() and caller_admin is None:
+            # an unverified sign-up must not be able to claim an address that carries platform power
+            raise HTTPException(status_code=403, detail="This address is reserved. Ask an existing administrator to create the account.")
+
         assigned_role = UserRole.REPORTER
         if caller_admin is not None and payload.role != UserRole.REPORTER:
             # An administrator adds people to their own city, whatever city the form says.
             tenant = session.get(Tenant, caller_admin.tenant_id)
             assigned_role = payload.role
         else:
-            tenant, created = get_or_create_tenant(session, payload.city, payload.state)
+            try:
+                tenant, created = get_or_create_tenant(session, payload.city, payload.state)
+            except IntegrityError:  # someone created the same city a moment ago
+                session.rollback()
+                tenant, created = get_or_create_tenant(session, payload.city, payload.state)
             if payload.role != UserRole.REPORTER:
                 # The first person to register a city administers it; after that only its admins can promote.
                 residents = session.scalar(
@@ -253,17 +331,21 @@ def create_app(
                     )
                 assigned_role = payload.role
 
-        user = users.add(
-            User(
-                name=payload.name.strip(),
-                email=email,
-                role=assigned_role,
-                password_hash=hash_password(payload.password),
-                tenant_id=tenant.id,
-                pincode=pincode,
+        try:
+            user = users.add(
+                User(
+                    name=payload.name.strip(),
+                    email=email,
+                    role=assigned_role,
+                    password_hash=hash_password(payload.password),
+                    tenant_id=tenant.id,
+                    pincode=pincode,
+                )
             )
-        )
-        session.commit()
+            session.commit()
+        except IntegrityError as error:  # the same email arrived twice at once
+            session.rollback()
+            raise HTTPException(status_code=409, detail="Email is already registered") from error
         return {
             "user_id": user.id,
             "email": user.email,
@@ -275,29 +357,60 @@ def create_app(
         }
 
     @app.post("/api/v1/auth/login")
-    def login(payload: LoginRequest, session: Session = Depends(get_session)) -> dict[str, str]:
+    def login(payload: LoginRequest, request: Request, session: Session = Depends(get_session)) -> dict[str, str]:
+        key = f"{client_address(request)}:{payload.email.strip().lower()}"
+        login_limiter.check(key)
         try:
             token = AuthenticationService(UserRepository(session), authenticator).login(payload.email, payload.password)
         except AuthenticationError as error:
+            login_limiter.hit(key)
             raise HTTPException(status_code=401, detail="Invalid credentials") from error
+        login_limiter.clear(key)
         return {"access_token": token, "token_type": "bearer"}
+
+    @app.post("/api/v1/auth/logout-all", status_code=204, response_model=None)
+    def logout_everywhere(principal: AuthPrincipal = Depends(current_principal), session: Session = Depends(get_session)) -> None:
+        """End every sign-in this person has, on every phone and browser (a lost or shared device)."""
+        bind_tenant_home = session.get(User, principal.user_id)
+        bind_tenant_home.token_version = (bind_tenant_home.token_version or 0) + 1
+        session.commit()
 
     @app.post("/api/v1/incidents", response_model=IncidentResponse, status_code=201)
     def create_incident(
         payload: IncidentCreateRequest,
+        response: Response,
         principal: AuthPrincipal = Depends(current_principal),
         session: Session = Depends(get_session),
+        idempotency_key: str | None = Header(default=None, max_length=64),
     ) -> IncidentResponse:
-        incident = build_services(session, app.state.storage)["incidents"].create_incident(
-            principal.user_id,
-            payload.reporter_type,
-            payload.description,
-            payload.latitude,
-            payload.longitude,
-            payload.occurred_at,
-            payload.pincode,
-        )
-        session.commit()
+        def earlier() -> Incident | None:
+            if not idempotency_key:
+                return None
+            return session.scalar(select(Incident).where(Incident.reporter_id == principal.user_id, Incident.client_key == idempotency_key))
+
+        found = earlier()
+        if found is not None:  # the app sent this report before (a retry after a timeout): do not make a second one
+            response.status_code = 200
+            return _incident_response(found)
+        try:
+            incident = build_services(session, app.state.storage)["incidents"].create_incident(
+                principal.user_id,
+                payload.reporter_type,
+                payload.description,
+                payload.latitude,
+                payload.longitude,
+                payload.occurred_at,
+                payload.pincode,
+                client_key=idempotency_key,
+            )
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            found = earlier()
+            if found is None:
+                raise
+            response.status_code = 200
+            return _incident_response(found)
         return _incident_response(incident)
 
     @app.get("/api/v1/incidents", response_model=list[IncidentResponse])
@@ -353,22 +466,22 @@ def create_app(
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         visible_incident(session, incident_id, principal)
-        if not file.content_type or not file.content_type.startswith("image/"):
-            raise HTTPException(status_code=400, detail="An image upload is required")
-        chunks: list[bytes] = []
-        total_size = 0
+        media_service = build_services(session, app.state.storage)["media"]
+        if len([a for a in media_service.list_evidence(incident_id) if not a.is_after_cleanup]) >= MAX_PHOTOS_PER_INCIDENT:
+            raise HTTPException(status_code=409, detail=f"A report can have at most {MAX_PHOTOS_PER_INCIDENT} photos")
+        buffer = bytearray()
         max_size = 10 * 1024 * 1024
         while chunk := await file.read(1024 * 1024):
-            total_size += len(chunk)
-            if total_size > max_size:
+            buffer.extend(chunk)
+            if len(buffer) > max_size:
                 raise HTTPException(status_code=413, detail="Image exceeds 10 MB limit")
-            chunks.append(chunk)
-        content = b"".join(chunks)
+        content = bytes(buffer)
         if not content:
             raise HTTPException(status_code=400, detail="Image cannot be empty")
-        asset = build_services(session, app.state.storage)["media"].store_for_incident(
-            incident_id, content, file.content_type
-        )
+        kind = sniff_image(content)  # judge the bytes, not the label the sender gave
+        if kind is None:
+            raise HTTPException(status_code=400, detail="An image upload is required: a JPEG, PNG, WebP or HEIC photo")
+        asset = media_service.store_for_incident(incident_id, content, kind)
         session.commit()
         return {
             "id": asset.id,
@@ -423,6 +536,25 @@ def create_app(
                 content={"job_id": job.id, "status": job.status.value, "detail": "Analysis job queued"},
             )
         services = build_services(session, app.state.storage)
+        session.get(Incident, incident_id, with_for_update=True)  # a second click waits here, then finds the first result
+        latest = session.scalars(
+            select(AnalysisResult).where(AnalysisResult.incident_id == incident_id).order_by(AnalysisResult.created_at.desc()).limit(1)
+        ).first()
+        if latest is not None and datetime.now(timezone.utc) - as_utc(latest.created_at) < timedelta(seconds=30):
+            known_risk = session.scalar(
+                select(RiskAssessment.score).where(RiskAssessment.incident_id == incident_id).order_by(RiskAssessment.created_at.desc()).limit(1)
+            )
+            return {
+                "id": latest.id,
+                "incident_id": latest.incident_id,
+                "provider": latest.provider,
+                "model_name": latest.model_name,
+                "category": latest.category,
+                "severity": latest.severity,
+                "confidence": latest.confidence,
+                "risk_score": known_risk,
+                "status": "ready_for_review",
+            }
         result = services["analysis"].analyze_incident(incident_id, app.state.analysis_adapter_factory())
         session.commit()
         # Score the hotspot right away so the supervisor queue is ranked without extra steps.
@@ -446,6 +578,8 @@ def create_app(
         principal: AuthPrincipal = Depends(current_principal),
         session: Session = Depends(get_session),
     ) -> JobResponse:
+        if principal.role not in STAFF_ROLES:
+            raise HTTPException(status_code=403, detail="Job access denied")
         job = JobRepository(session).get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
@@ -496,4 +630,10 @@ def create_app(
     return app
 
 
-app = create_app()
+def __getattr__(name: str) -> Any:
+    """`uvicorn civicloop.api:app` still works, but importing this module no longer builds an app (and a database file)."""
+    if name == "app":
+        built = create_app()
+        globals()["app"] = built
+        return built
+    raise AttributeError(name)

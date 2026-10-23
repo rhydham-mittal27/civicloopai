@@ -43,7 +43,7 @@ def test_fastapi_auth_incident_media_and_analysis(tmp_path):
         media_response = client.post(
             f"/api/v1/incidents/{incident_id}/media",
             headers=headers,
-            files={"file": ("before.jpg", b"image-bytes", "image/jpeg")},
+            files={"file": ("before.jpg", b"\xff\xd8\xffimage-bytes", "image/jpeg")},
         )
         assert media_response.status_code == 201
         analysis_response = client.post(f"/api/v1/incidents/{incident_id}/analysis", headers=headers)

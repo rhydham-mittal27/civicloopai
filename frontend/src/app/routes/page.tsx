@@ -23,10 +23,11 @@ const CITY_CENTRE = { lat: "30.7333", lon: "76.7794" };
 
 function Planner() {
   const router = useRouter();
-  const orders = useLoad(async () => [...(await api.listOrders("approved")), ...(await api.listOrders("assigned"))], []);
+  const orders = useLoad(async () => [...(await api.listOrders("assigned")), ...(await api.listOrders("in_progress"))], []);
   const plans = useLoad(() => api.listRoutes(), []);
   const { busy, error, run } = useAction();
 
+  const [driverId, setDriverId] = useState<string>("");
   const [selected, setSelected] = useState<string[]>([]); // click order is the "selection order" baseline
   const [capacity, setCapacity] = useState("20");
   const [maxMinutes, setMaxMinutes] = useState("");
@@ -37,13 +38,25 @@ function Planner() {
   const [preview, setPreview] = useState<{ key: string; plan: RoutePlan } | null>(null);
 
   const routed = useMemo(() => new Set((plans.data ?? []).flatMap((p) => p.stops.map((s) => s.work_order_id))), [plans.data]);
+  // a route belongs to one driver, so only jobs already given to a driver can be grouped, one driver at a time
+  const open = useMemo(() => (orders.data ?? []).filter((o) => !routed.has(o.id) && o.incident && o.assigned_to), [orders.data, routed]);
+  const drivers = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; jobs: number }>();
+    for (const o of open) {
+      const d = map.get(o.assigned_to!) ?? { id: o.assigned_to!, name: o.assigned_to_name ?? "Driver", jobs: 0 };
+      d.jobs += 1;
+      map.set(d.id, d);
+    }
+    return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [open]);
+  const driver = drivers.find((d) => d.id === driverId) ?? drivers[0] ?? null;
   const jobs: Job[] = useMemo(
     () =>
-      (orders.data ?? [])
-        .filter((o) => !routed.has(o.id) && o.incident)
+      open
+        .filter((o) => o.assigned_to === driver?.id)
         .map((o) => ({ id: o.id, lat: o.incident!.latitude, lon: o.incident!.longitude, priority: o.priority, volume: o.estimated_volume ?? 0, label: o.incident!.description }))
         .sort((a, b) => b.priority - a.priority),
-    [orders.data, routed],
+    [open, driver?.id],
   );
   const byId = new Map(jobs.map((j) => [j.id, j]));
   const chosen = selected.filter((id) => byId.has(id));
@@ -79,7 +92,7 @@ function Planner() {
     if (plan) setPreview({ key, plan });
   }
   async function save() {
-    const plan = await run("save", () => api.createRoute(request), "Route saved as a draft");
+    const plan = await run("save", () => api.createRoute(request), `Route saved as a draft for ${driver?.name ?? "the driver"}`);
     if (plan) router.push(`/routes/${plan.id}`);
   }
 
@@ -90,10 +103,10 @@ function Planner() {
 
   return (
     <>
-      <PageHead title="Route planner">Pick the jobs for one vehicle, preview the optimised route against the order you picked them in, then save it for approval. Nothing is dispatched automatically.</PageHead>
+      <PageHead title="Route planner">A route is one driver's day. Choose a driver, group the jobs already assigned to them, preview the optimised order, then save it. When you approve it, it appears in that driver's app.</PageHead>
 
       <section className="kpis kpis-act" aria-label="Dispatch at a glance">
-        <KpiCard icon="truck" label="Jobs ready to route" value={jobs.length} secondary={`· ${readyVolume.toFixed(1)} m³`} detail="Approved and not on a route yet" band={jobs.length > 0 ? "warn" : "good"} />
+        <KpiCard icon="truck" label="Jobs ready to route" value={open.length} secondary={`· ${readyVolume.toFixed(1)} m³ for ${driver?.name ?? "no one"}`} detail="Assigned to a driver and not on a route yet" band={open.length > 0 ? "warn" : "good"} />
         <KpiCard icon="review" label="Routes to approve" value={awaiting} secondary={`/ ${all.length}`} detail={awaiting ? "Drafts waiting for you" : "Nothing waiting"} band={awaiting > 0 ? "warn" : "good"} hint="Routes that are planned but not yet approved." ring={all.length ? (all.length - awaiting) / all.length : null} />
         <KpiCard icon="route" label="Stops per route" value={all.length ? (all.reduce((s, p) => s + p.stops.length, 0) / all.length).toFixed(1) : "–"} detail={`${all.length} route${all.length === 1 ? "" : "s"} planned`} />
         <KpiCard
@@ -111,16 +124,16 @@ function Planner() {
         <Loading label="Loading jobs" />
       ) : orders.error ? (
         <ErrorNote message={orders.error} />
-      ) : jobs.length === 0 ? (
+      ) : open.length === 0 ? (
         <Empty
-          title="No jobs are waiting for a route"
+          title="No assigned jobs are waiting for a route"
           action={
             <Link href="/work" className="btn">
-              Approve more work orders
+              Assign work orders to drivers
             </Link>
           }
         >
-          {routed.size > 0 ? `All ${routed.size} approved jobs are already on a planned route.` : "Approve work orders first, then plan their route here."}
+          {routed.size > 0 ? `All ${routed.size} assigned jobs are already on a planned route.` : "Assign approved work orders to a driver first, then group that driver's jobs into a route here."}
         </Empty>
       ) : (
         <section className="planner" aria-label="Plan a route">
@@ -144,7 +157,7 @@ function Planner() {
             <div className="step">
               <div className="step-head">
                 <h2>
-                  <span className="step-n">1</span> Pick jobs
+                  <span className="step-n">1</span> Driver and jobs
                 </h2>
                 <div className="btn-row">
                   <button type="button" className="btn btn-quiet" onClick={fillVehicle} title="Add the highest-priority jobs until the vehicle is full">
@@ -154,6 +167,25 @@ function Planner() {
                     Clear
                   </button>
                 </div>
+              </div>
+              <div className="field">
+                <label htmlFor="driver">Driver</label>
+                <select
+                  id="driver"
+                  className="input"
+                  value={driver?.id ?? ""}
+                  onChange={(e) => {
+                    setDriverId(e.target.value);
+                    setSelected([]);
+                    setPreview(null);
+                  }}
+                >
+                  {drivers.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name} · {d.jobs} job{d.jobs === 1 ? "" : "s"}
+                    </option>
+                  ))}
+                </select>
               </div>
               <ul className="joblist">
                 {jobs.map((j) => {
@@ -257,7 +289,7 @@ function Planner() {
                   <div className="btn-row">
                     <button type="button" className="btn btn-primary" disabled={!!busy} onClick={save}>
                       {busy === "save" && <Spinner />}
-                      Save route
+                      Save route for {driver?.name ?? "driver"}
                     </button>
                     <button type="button" className="btn" disabled={!!busy} onClick={() => setPreview(null)}>
                       Discard preview
@@ -294,13 +326,14 @@ function Planner() {
                       {plan.stops.length} stops · {plan.estimated_distance_km?.toFixed(1)} km
                     </strong>
                     <span className="badge" data-status={plan.approved_by ? "verified" : "ready_for_review"}>
-                      {plan.approved_by ? "Approved" : "Awaiting approval"}
+                      {plan.approved_by ? "Sent to driver" : "Awaiting approval"}
                     </span>
                   </div>
                   <div className="fillbar thin" aria-hidden="true">
                     <span style={{ width: `${Math.min(100, (used / plan.vehicle_capacity) * 100)}%` }} />
                   </div>
                   <div className="route-card-meta">
+                    <span>{plan.worker_name ? `Driver: ${plan.worker_name}` : "No driver"}</span>
                     <span>
                       {Math.round((used / plan.vehicle_capacity) * 100)}% of {plan.vehicle_capacity} m³
                     </span>

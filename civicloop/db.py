@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from sqlalchemy import create_engine as sqlalchemy_create_engine
+from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -14,12 +15,23 @@ class Base(DeclarativeBase):
 def create_engine(database_url: str = "sqlite:///civicloop.db", **kwargs: Any) -> Engine:
     """Create a SQLAlchemy engine for SQLite or another supported backend."""
     if database_url.startswith("sqlite"):
-        kwargs.setdefault("connect_args", {"check_same_thread": False})
-    else:
-        kwargs.setdefault("pool_size", 20)
-        kwargs.setdefault("max_overflow", 10)
-        kwargs.setdefault("pool_pre_ping", True)
-        kwargs.setdefault("pool_recycle", 1800)
+        kwargs.setdefault("connect_args", {"check_same_thread": False, "timeout": 10})
+        engine = sqlalchemy_create_engine(database_url, **kwargs)
+        if ":memory:" not in database_url:
+
+            @event.listens_for(engine, "connect")
+            def _sqlite_pragmas(connection, _record):  # noqa: ANN001
+                cursor = connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")  # SQLite ignores foreign keys unless asked
+                cursor.execute("PRAGMA journal_mode=WAL")  # readers no longer block the writer
+                cursor.execute("PRAGMA busy_timeout=5000")  # wait for a lock instead of failing at once
+                cursor.close()
+
+        return engine
+    kwargs.setdefault("pool_size", 20)
+    kwargs.setdefault("max_overflow", 10)
+    kwargs.setdefault("pool_pre_ping", True)
+    kwargs.setdefault("pool_recycle", 1800)
     return sqlalchemy_create_engine(database_url, **kwargs)
 
 
@@ -35,6 +47,19 @@ def init_db(engine: Engine) -> None:
     from civicloop import models  # noqa: F401
 
     Base.metadata.create_all(engine)
+
+
+def assert_schema_current(engine: Engine, ini_path: str = "alembic.ini") -> None:
+    """Refuse to start on a database the code was not written for (run `alembic upgrade head` first)."""
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    head = ScriptDirectory.from_config(Config(ini_path)).get_current_head()
+    with engine.connect() as connection:
+        current = MigrationContext.configure(connection).get_current_revision()
+    if current != head:
+        raise RuntimeError(f"The database is at revision {current}, this version needs {head}. Run: alembic upgrade head")
 
 
 @contextmanager

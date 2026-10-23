@@ -127,6 +127,10 @@ export interface RouteStop {
   work_order_id: string;
   planned_volume: number | null;
   priority: number | null;
+  order_status?: string | null;
+  done?: boolean;
+  reassigned?: boolean;
+  cancelled?: boolean;
   incident: Incident | null;
 }
 
@@ -148,6 +152,15 @@ export interface RoutePlan {
   baseline_distance_km: number | null;
   saving_ratio: number | null;
   approved_by: string | null;
+  /** Set when the supervisor approved it: from then on the driver sees it. */
+  approved_at?: string | null;
+  worker_id?: string | null;
+  worker_name?: string | null;
+  vehicle_id?: string | null;
+  stops_total?: number;
+  stops_done?: number;
+  next_stop?: number | null;
+  active?: boolean;
   engine_version: string | null;
   created_at: string;
   stops: RouteStop[];
@@ -283,6 +296,40 @@ export interface MapPoint {
   description: string;
 }
 
+export type VehicleState = "moving" | "idle" | "stale" | "offline" | "no_signal" | "disabled";
+
+export interface Vehicle {
+  id: string;
+  label: string;
+  registration: string | null;
+  driver_id: string | null;
+  driver_name: string | null;
+  is_active: boolean;
+  state: VehicleState;
+  lat: number | null;
+  lon: number | null;
+  speed_kmh: number | null;
+  heading: number | null;
+  accuracy_m: number | null;
+  last_seen_at: string | null;
+  age_seconds: number | null;
+  source: "phone" | "device" | null;
+  distance_today_km: number;
+}
+
+/** Returned once, when a vehicle is created or its tracker key is replaced. */
+export interface VehicleWithKey extends Vehicle {
+  device_key: string;
+}
+
+export interface TrailPoint {
+  lat: number;
+  lon: number;
+  speed_kmh: number | null;
+  heading: number | null;
+  recorded_at: string;
+}
+
 export interface AttentionItem {
   kind: "sla_breach" | "evidence" | "review" | "dispatch";
   reason: string;
@@ -365,6 +412,7 @@ export function setTenant(id: string | null) {
 }
 
 export function setToken(token: string | null) {
+  // `token` here is the page marker, never the API token (see raw())
   try {
     if (token) localStorage.setItem(TOKEN_KEY, token);
     else {
@@ -393,8 +441,9 @@ function messageFrom(body: unknown, fallback: string): string {
 
 async function raw(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
+  // The real token lives in an httpOnly cookie that the proxy in app/api/v1 turns into the Authorization header.
+  // What getToken() returns is only a marker (who, role, expiry) for drawing the right screens.
   const token = getToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
   const city = token ? getTenant() : null;
   if (city) headers.set("X-Tenant-Id", city);
   if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
@@ -409,6 +458,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await raw(path, init);
   const body = await response.json().catch(() => null);
   if (!response.ok) {
+    if (response.status === 401 && getToken() && !path.startsWith("/auth/login")) {
+      // the API ended this sign-in (expired, signed out everywhere, account switched off): forget it here too
+      setToken(null);
+      window.dispatchEvent(new Event("storage"));
+    }
     throw new ApiError(messageFrom(body, `Request failed (${response.status})`), response.status);
   }
   return body as T;
@@ -454,7 +508,8 @@ export const api = {
     longitude: number;
     occurred_at: string;
     pincode?: string;
-  }) => post<Incident>("/incidents", input),
+  }, idempotencyKey?: string) =>
+    request<Incident>("/incidents", { method: "POST", body: JSON.stringify(input), headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined }),
   changeStatus: (id: string, status: IncidentStatus) => patch<Incident>(`/incidents/${id}/status`, { status }),
   listMedia: (id: string) => request<MediaAsset[]>(`/incidents/${id}/media`),
   uploadMedia: (id: string, file: File) => upload<MediaAsset>(`/incidents/${id}/media`, file),
@@ -498,6 +553,7 @@ export const api = {
 
   // routes
   listRoutes: () => request<RoutePlan[]>("/routes"),
+  myRoutes: () => request<RoutePlan[]>("/routes/mine"),
   getRoute: (id: string) => request<RoutePlan>(`/routes/${id}`),
   createRoute: (body: {
     work_order_ids: string[];
@@ -518,6 +574,16 @@ export const api = {
   // dashboard
   dashboardSummary: (days = 14) => request<DashboardSummary>(`/dashboard/summary?days=${days}`),
   dashboardMap: () => request<MapPoint[]>("/dashboard/map"),
+
+  // live fleet
+  vehicles: () => request<Vehicle[]>("/vehicles"),
+  createVehicle: (input: { label: string; registration?: string; driver_id?: string }) => post<VehicleWithKey>("/vehicles", input),
+  patchVehicle: (id: string, body: { label?: string; registration?: string; driver_id?: string | null; is_active?: boolean }) => patch<Vehicle>(`/vehicles/${id}`, body),
+  rotateVehicleKey: (id: string) => post<VehicleWithKey>(`/vehicles/${id}/device-key`),
+  vehicleTrail: (id: string, minutes = 60) => request<TrailPoint[]>(`/vehicles/${id}/trail${query({ minutes })}`),
+  myVehicles: () => request<Vehicle[]>("/vehicles/mine"),
+  sharePosition: (id: string, fix: { lat: number; lon: number; speed_kmh?: number; heading?: number; accuracy_m?: number }) =>
+    post<{ accepted: number; dropped: number }>(`/vehicles/${id}/position`, fix),
   previewRoute: (body: {
     work_order_ids: string[];
     vehicle_capacity: number;

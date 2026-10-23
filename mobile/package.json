@@ -1,0 +1,19 @@
+{
+  "name": "civicloop-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CivicLoopAI mobile apps: a resident app and a crew app, sharing one API client and UI kit.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "resident": "npm run start --workspace apps/resident",
+    "crew": "npm run start --workspace apps/crew"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}

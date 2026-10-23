@@ -51,6 +51,8 @@ function ReportForm() {
   const router = useRouter();
   const toast = useToast();
   const picker = useRef<PickerHandle>(null);
+  // one key per report: a retry or a second click returns the first report instead of making another
+  const sendKey = useRef<string>(typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now()));
   const canChooseReporter = isSupervisor(principal?.role);
 
   const [description, setDescription] = useState(readDraft);
@@ -164,7 +166,7 @@ function ReportForm() {
         longitude: place!.lon,
         occurred_at: (when === "now" ? new Date() : new Date(earlier)).toISOString(),
         pincode: pincode || undefined,
-      });
+      }, sendKey.current);
       incidentId = incident.id;
     } catch (err) {
       setErrors({ form: err instanceof Error ? err.message : "Could not submit the report" });

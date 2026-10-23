@@ -154,6 +154,8 @@ class FleetService:
         """Store the plausible fixes and move the vehicle. Returns how many were kept and dropped."""
         now = now or datetime.now(timezone.utc)
         kept = dropped = 0
+        # the phone and a tracker may both report for one vehicle: take turns on its row
+        self.session.refresh(vehicle, with_for_update=True)
         ordered = sorted(fixes, key=lambda f: as_utc(f.recorded_at) if f.recorded_at else now)
         prev_time = as_utc(vehicle.last_seen_at) if vehicle.last_seen_at else None
         prev_pos = (vehicle.last_lat, vehicle.last_lon) if vehicle.last_lat is not None else None

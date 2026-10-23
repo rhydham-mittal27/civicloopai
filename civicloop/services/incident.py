@@ -34,6 +34,7 @@ class IncidentService:
         longitude: float,
         occurred_at: datetime,
         pincode: str | None = None,
+        client_key: str | None = None,
     ) -> Incident:
         reporter = require_user(
             self.users,
@@ -50,6 +51,7 @@ class IncidentService:
             Incident(
                 reporter_id=reporter_id,
                 reporter_type=reporter_type,
+                client_key=client_key,
                 description=description.strip(),
                 latitude=latitude,
                 longitude=longitude,

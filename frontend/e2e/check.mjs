@@ -20,14 +20,14 @@ const CREDS = {
 const NAV = {
   resident: ["My reports"],
   worker: ["Incidents", "My assignments"],
-  supervisor: ["Dashboard", "Incidents", "Work orders", "Routes", "Insights", "Integrations", "Audit log"],
-  admin: ["Dashboard", "Incidents", "Work orders", "Routes", "Insights", "Integrations", "Audit log", "Users", "Cities", "Background jobs"],
+  supervisor: ["Dashboard", "Incidents", "Work orders", "Routes", "Live fleet", "Insights", "Integrations", "Audit log"],
+  admin: ["Dashboard", "Incidents", "Work orders", "Routes", "Live fleet", "Insights", "Integrations", "Audit log", "Users", "Cities", "Background jobs"],
 };
-const ALL_PAGES = ["/work", "/routes", "/insights", "/integrations", "/admin/audit", "/admin/users", "/admin/jobs", "/platform/cities"];
+const ALL_PAGES = ["/work", "/routes", "/fleet", "/insights", "/integrations", "/admin/audit", "/admin/users", "/admin/jobs", "/platform/cities"];
 const ALLOWED = {
   resident: [],
   worker: ["/work"],
-  supervisor: ["/work", "/routes", "/insights", "/integrations", "/admin/audit"],
+  supervisor: ["/work", "/routes", "/fleet", "/insights", "/integrations", "/admin/audit"],
   admin: ALL_PAGES,
 };
 
@@ -470,6 +470,67 @@ await step("Worker: assignment, evidence", async () => {
   await wrk.locator('img[alt="After cleanup"]').waitFor();
   await shot(wrk, "detail-verified");
   ok((await wrk.getByRole("button", { name: "Confirm cleaned" }).count()) === 0, "worker cannot review their own evidence");
+});
+
+await step("Live fleet: map, tracker feed, tracker key, phone sharing", async () => {
+  const supToken = await apiToken("supervisor");
+  const auth = { "Content-Type": "application/json", Authorization: `Bearer ${supToken}` };
+  const workers = await (await fetch(`${API}/users?role=sanitation_worker`, { headers: auth })).json();
+  const label = `E2E truck ${Date.now() % 10000}`;
+  const made = await (await fetch(`${API}/vehicles`, { method: "POST", headers: auth, body: JSON.stringify({ label, driver_id: workers[0].id }) })).json();
+  const feed = (body, key = made.device_key) => fetch(`${API}/telemetry/gps`, { method: "POST", headers: { "Content-Type": "application/json", "X-Device-Key": key }, body: JSON.stringify(body) });
+  ok((await feed({ lat: 30.7333, lon: 76.7794, speed_kmh: 24, heading: 90 })).status === 200, "fleet: a tracker with its key reports a position");
+  ok((await feed({ lat: 30.7333, lon: 76.7794 }, "clv_not-a-real-key")).status === 401, "fleet: a wrong tracker key is refused");
+
+  await login(sup, "supervisor");
+  await sup.goto(`${BASE}/fleet`);
+  await sup.getByRole("heading", { name: "Live fleet" }).waitFor();
+  await sup.locator("g.vehicle").first().waitFor({ timeout: 15000 });
+  ok((await sup.locator("g.vehicle").count()) >= 1, "fleet: the vehicle is drawn on the live map");
+  const item = sup.locator(".fleet-item", { hasText: label });
+  await item.waitFor();
+  ok((await item.innerText()).includes("Moving"), "fleet: the list shows it as moving");
+  await item.click();
+  await sup.getByRole("region", { name: `${label} details` }).waitFor();
+  ok((await sup.getByRole("region", { name: `${label} details` }).innerText()).includes("GPS tracker"), "fleet: the detail panel names the tracker as the source");
+  await shot(sup, "fleet");
+  await noScroll(sup, "fleet");
+
+  // replacing the key shows the new one once and cuts off the old tracker
+  await sup.getByRole("button", { name: "New tracker key" }).click();
+  await sup.getByRole("button", { name: "Yes, replace the key" }).click();
+  await sup.getByRole("heading", { name: `Tracker key for ${label}` }).waitFor();
+  const shown = await sup.locator(".key-box code").innerText();
+  ok(shown.startsWith("clv_") && shown !== made.device_key, "fleet: a new tracker key is shown once");
+  ok((await feed({ lat: 30.7333, lon: 76.7794 })).status === 401, "fleet: the old tracker key stops working");
+  ok((await feed({ lat: 30.7333, lon: 76.7794, speed_kmh: 10 }, shown)).status === 200, "fleet: the new key works");
+  await sup.getByRole("button", { name: "I have saved it" }).click();
+
+  // add a vehicle in the page
+  await sup.getByRole("button", { name: "Add vehicle" }).first().click();
+  const added = `Page truck ${Date.now() % 10000}`;
+  await sup.getByLabel("Name").fill(added);
+  await sup.getByRole("button", { name: "Add vehicle" }).last().click();
+  await sup.getByRole("heading", { name: `Tracker key for ${added}` }).waitFor();
+  ok(true, "fleet: a vehicle can be added from the page");
+
+  // a crew phone shares its location as the vehicle's position
+  await login(wrk, "worker");
+  await wrk.goto(`${BASE}/work`);
+  await wrk.getByRole("heading", { name: "Share my vehicle's location" }).waitFor();
+  if (await wrk.locator("#share-vehicle").count()) await wrk.locator("#share-vehicle").selectOption({ label });
+  await wrk.getByRole("button", { name: "Start sharing" }).click();
+  await wrk.getByText(/^Sent at /).waitFor({ timeout: 20000 });
+  ok(true, "fleet: the crew phone shares its location");
+  await shot(wrk, "work-sharing");
+  const listed = await (await fetch(`${API}/vehicles`, { headers: auth })).json();
+  ok(listed.find((v) => v.label === label)?.source === "phone", "fleet: the vehicle now reports from the phone");
+  await wrk.getByRole("button", { name: "Stop sharing" }).click();
+  await wrk.getByText(/^Stopped\./).waitFor();
+  ok(true, "fleet: the crew can stop sharing");
+
+  // a resident cannot see the fleet
+  ok((await fetch(`${API}/vehicles`, { headers: { Authorization: `Bearer ${await apiToken("resident")}` } })).status === 403, "fleet: residents are refused");
 });
 
 await step("Supervisor: review evidence", async () => {

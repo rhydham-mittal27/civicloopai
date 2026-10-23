@@ -55,6 +55,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(() => {
     setToken(null);
+    void fetch("/api/v1/auth/logout", { method: "POST" }).catch(() => {}); // clears the httpOnly cookie
     emit();
   }, []);
 

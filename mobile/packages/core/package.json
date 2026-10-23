@@ -1,0 +1,14 @@
+{
+  "name": "@civicloop/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Typed CivicLoopAI API client, shared types and plain helpers. No React Native imports, so it can be tested in Node.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3"
+  }
+}

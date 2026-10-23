@@ -27,6 +27,7 @@ class AuthPrincipal:
         None  # filled from the database, never trusted from the token
     )
     is_platform_admin: bool = False
+    token_version: int = 0
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -40,11 +41,25 @@ def hash_password(password: str, salt: bytes | None = None) -> str:
 def verify_password(password: str, encoded: str | None) -> bool:
     if not encoded or not encoded.startswith("scrypt$1$"):
         return False
-    _, _, encoded_salt, encoded_digest = encoded.split("$", 3)
-    salt = base64.urlsafe_b64decode(encoded_salt.encode())
-    expected = base64.urlsafe_b64decode(encoded_digest.encode())
-    actual = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1)
+    try:
+        _, _, encoded_salt, encoded_digest = encoded.split("$", 3)
+        salt = base64.urlsafe_b64decode(encoded_salt.encode())
+        expected = base64.urlsafe_b64decode(encoded_digest.encode())
+        actual = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1)
+    except ValueError:  # a damaged stored hash is a failed sign-in, not a server error
+        return False
     return hmac.compare_digest(actual, expected)
+
+
+_dummy_hash: str | None = None
+
+
+def _dummy() -> str:
+    """A throwaway hash, so an unknown email costs the same time as a wrong password."""
+    global _dummy_hash
+    if _dummy_hash is None:
+        _dummy_hash = hash_password("not-a-real-password")
+    return _dummy_hash
 
 
 class TokenAuthenticator:
@@ -60,6 +75,7 @@ class TokenAuthenticator:
             "sub": user.id,
             "role": user.role.value,
             "iat": issued_at,
+            "ver": int(getattr(user, "token_version", 0) or 0),
             "exp": issued_at + self.ttl_seconds,
         }
         encoded = self._encode(payload)
@@ -79,7 +95,10 @@ class TokenAuthenticator:
             if current >= int(payload["exp"]):
                 raise AuthenticationError("Token has expired")
             return AuthPrincipal(
-                str(payload["sub"]), UserRole(str(payload["role"])), int(payload["exp"])
+                str(payload["sub"]),
+                UserRole(str(payload["role"])),
+                int(payload["exp"]),
+                token_version=int(payload.get("ver", 0)),
             )
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
             raise AuthenticationError("Invalid authentication token") from error
@@ -107,11 +126,8 @@ class AuthenticationService:
 
     def login(self, email: str, password: str) -> str:
         user = self.users.get_by_email(email.strip().lower())
-        if (
-            user is None
-            or not user.is_active
-            or not verify_password(password, user.password_hash)
-        ):
+        password_ok = verify_password(password, user.password_hash if user else _dummy())
+        if user is None or not user.is_active or not password_ok:
             raise AuthenticationError("Invalid credentials")
         return self.authenticator.issue(user)
 
@@ -120,6 +136,7 @@ class AuthenticationService:
         if user is None:
             raise AuthenticationError("User not found")
         user.password_hash = hash_password(password)
+        user.token_version = (user.token_version or 0) + 1  # every sign-in made before this stops working
         return self.users.update(user)
 
 
@@ -127,6 +144,7 @@ def authenticator_from_env() -> TokenAuthenticator:
     secret = os.environ.get("CIVICLOOP_AUTH_SECRET")
     if not secret:
         raise AuthenticationError("CIVICLOOP_AUTH_SECRET is required")
+    # the same variable the API reads, so there is one place to set how long a sign-in lasts
     return TokenAuthenticator(
-        secret, int(os.environ.get("CIVICLOOP_AUTH_TTL_SECONDS", "3600"))
+        secret, int(os.environ.get("CIVICLOOP_TOKEN_TTL_SECONDS", str(12 * 3600)))
     )

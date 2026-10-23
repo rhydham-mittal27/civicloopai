@@ -104,10 +104,11 @@ def seed_demo(session: Session, seed: int = 11, city: str = "Chandigarh", pincod
         order_ids.append(order.id)
 
     first_run, second_run, spare = order_ids[:8], order_ids[8:13], order_ids[13:]
+    # a route only groups jobs already assigned to one driver; approving it sends it to that driver
+    for order_id in first_run + second_run:
+        services["orders"].assign_order(order_id, worker.id, supervisor.id)
     plan_one = services["routes"].build_route(first_run, 20.0, {}, supervisor.id, None, DEPOT)
     services["routes"].approve_route(plan_one.id, supervisor.id)
-    for order_id in first_run:
-        services["orders"].assign_order(order_id, worker.id, supervisor.id)
     services["routes"].build_route(second_run, 14.0, {"max_duration_minutes": 240}, supervisor.id, None, DEPOT)
     # a few of the assigned jobs are already being worked
     for order_id in first_run[:3]:

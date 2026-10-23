@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,6 +18,21 @@ from civicloop.models import Tenant, User, UserRole, Vehicle
 from civicloop.routes_ops import Ctx, SUPERVISOR, _iso
 from civicloop.services.fleet import Fix, FleetService, as_utc, hash_key, vehicle_state
 from civicloop.tenancy import bind_tenant
+
+# a tracker sends a fix every few seconds, so this is generous but stops a loop or a leaked key
+DEVICE_LIMIT = 240  # requests ...
+DEVICE_WINDOW = 60.0  # ... per minute, per vehicle
+_device_hits: dict[str, deque[float]] = defaultdict(deque)
+
+
+def _device_allowed(vehicle_id: str) -> bool:
+    now, hits = time.monotonic(), _device_hits[vehicle_id]
+    while hits and now - hits[0] > DEVICE_WINDOW:
+        hits.popleft()
+    if len(hits) >= DEVICE_LIMIT:
+        return False
+    hits.append(now)
+    return True
 
 
 class VehicleCreate(BaseModel):
@@ -186,6 +203,8 @@ def build_fleet_router(ctx: Ctx) -> APIRouter:
         city = session.get(Tenant, vehicle.tenant_id)
         if city is None or not city.is_active:
             raise HTTPException(status_code=403, detail="This city is disabled")
+        if not _device_allowed(vehicle.id):
+            raise HTTPException(status_code=429, detail="Too many reports from this device. Send fewer, batched in `points`.", headers={"Retry-After": "30"})
         bind_tenant(session, vehicle.tenant_id)  # the tracker can only ever write into its own city
         return vehicle
 

@@ -40,8 +40,9 @@ their complaints as an input (we already have a manual import) and sell the laye
 the contract and the data. It could build what we do. Our edge over it would have to be speed on verification and prioritisation
 and being software-only, which a city that wants to keep its own contractors might prefer.
 
-**We do not match these on** live GPS and RFID tracking and weighbridge data. We have no hardware. They own the vehicle data that
-a route optimiser ideally uses. Partnering with, not competing against, a tracking vendor is the realistic path.
+**We now match these on basic live GPS tracking** (a crew phone or any tracker can feed us), but not on RFID, weighbridge data or
+years of deployed hardware. They own the vehicle data a route optimiser ideally uses, so accepting a feed from the city's existing
+tracking vendor is the realistic path.
 
 ## 3. Compliance and marketplace
 
@@ -86,7 +87,7 @@ which makes "AI before-and-after" less unique over time.
 
 ## Gaps this exposes in our product
 
-- No live vehicle tracking, RFID or weighbridge input. We cannot see where trucks are, so route plans are not checked against real trips.
+- **Live GPS tracking is now built** (phone or tracker feed, live map). Still missing: RFID and weighbridge input, and showing a truck against its planned route, so plans are not yet checked against real trips.
 - The after-photo check does not look at the image. A real version (location match, image comparison) is a pilot item.
 - No bulk-generator compliance features, where Recykal and the new rules are strong.
 - Nothing proven on real data: the model, the AI photo reading and the savings are all simulated or unmeasured.
@@ -96,7 +97,7 @@ which makes "AI before-and-after" less unique over time.
 
 1. **Pitch us as the layer on top**, not a replacement: it takes complaints from Swachhata or a city's 311 and gives back a ranked, routed, verified job list.
 2. **Add location-based closure** (match the after-photo to the report's location, as Bengaluru does) before a pilot. It is cheap and closes the most obvious hole.
-3. **Integrate, do not rebuild, tracking.** Accept a GPS feed from the city's existing vendor.
+3. **Integrate, do not rebuild, tracking.** The tracker endpoint already accepts a feed with a per-vehicle key; add an adapter for the city's existing vendor's format.
 4. **Pick one pilot city and measure** real time-to-clear and repeat-site rate. That evidence is the only thing none of the claims above can match.
 5. Treat WeVOIS as the benchmark: study its city list and ask pilot cities what it cannot do for them.
 

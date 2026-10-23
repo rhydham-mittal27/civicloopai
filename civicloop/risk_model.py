@@ -15,6 +15,7 @@ Honesty rules baked in:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import threading
@@ -320,8 +321,15 @@ class RiskModelStore:
         if outcome.deployed and outcome.model is not None:
             file = self.directory / f"{meta['version']}.joblib"
             joblib.dump({"model": outcome.model, "meta": meta}, file)
-            self._pointer.write_text(json.dumps({"file": file.name, "meta": meta}, indent=2), encoding="utf-8")
-        self._last_run.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            self._write_atomic(self._pointer, json.dumps({"file": file.name, "meta": meta}, indent=2))
+        self._write_atomic(self._last_run, json.dumps(meta, indent=2))
+
+    @staticmethod
+    def _write_atomic(path: Path, text: str) -> None:
+        """Write to a temporary file and swap it in, so a reader never sees half a file."""
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
 
     def load(self) -> "LoadedModel | None":
         import joblib
@@ -337,6 +345,8 @@ class RiskModelStore:
                 pointer = json.loads(self._pointer.read_text(encoding="utf-8"))
                 blob = joblib.load(self.directory / pointer["file"])
             except Exception:
+                # the heuristic score is used instead, and the log says why
+                logging.getLogger("civicloop.risk").warning("risk model could not be loaded from %s; using the built-in score", self.directory, exc_info=True)
                 return None
             loaded = LoadedModel(blob["model"], blob["meta"])
             self._cache = (stamp, loaded)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy.exc import IntegrityError
+
 from civicloop.models import IncidentStatus, UserRole, WorkOrder, WorkOrderStatus
 from civicloop.repositories import (
     AuditEventRepository,
@@ -40,14 +42,18 @@ class WorkOrderService:
             raise ValueError("This incident already has an active work order")
         if estimated_volume is not None and estimated_volume < 0:
             raise ValueError("Estimated volume cannot be negative")
-        order = self.work_orders.add(
-            WorkOrder(
-                incident_id=incident_id,
-                priority=priority,
-                estimated_volume=estimated_volume,
-                status=WorkOrderStatus.DRAFT,
+        try:
+            order = self.work_orders.add(
+                WorkOrder(
+                    incident_id=incident_id,
+                    priority=priority,
+                    estimated_volume=estimated_volume,
+                    status=WorkOrderStatus.DRAFT,
+                )
             )
-        )
+        except IntegrityError as error:  # two supervisors at once: the database allows only one live order
+            self.work_orders.session.rollback()
+            raise ValueError("This incident already has an active work order") from error
         record_audit(self.audit, actor_id, "work_order", order.id, "created")
         return order
 
@@ -122,7 +128,7 @@ class WorkOrderService:
         return self._get(order_id)
 
     def _get(self, order_id: str) -> WorkOrder:
-        order = self.work_orders.get(order_id)
+        order = self.work_orders.get_locked(order_id)
         if order is None:
             raise NotFoundError(f"Work order not found: {order_id}")
         return order

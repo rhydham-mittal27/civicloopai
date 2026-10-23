@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { useToast } from "@/components/Toast";
@@ -20,6 +21,7 @@ function Cities() {
   const { data, error, loading, reload } = useLoad(() => api.platformCities(), []);
   const { busy, error: actionError, run } = useAction();
   const toast = useToast();
+  const router = useRouter();
   const [mergeFrom, setMergeFrom] = useState<CityRow | null>(null);
   const [mergeInto, setMergeInto] = useState("");
 
@@ -108,7 +110,7 @@ function Cities() {
                         disabled={c.id === me.data?.tenant_id || !c.is_active}
                         onClick={() => {
                           setTenant(c.id);
-                          window.location.assign("/");
+                          router.push("/");
                         }}
                       >
                         Open

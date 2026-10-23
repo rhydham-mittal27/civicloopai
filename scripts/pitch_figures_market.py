@@ -125,7 +125,7 @@ def competitors():
     cols = ["Government\ncomplaint apps", "City waste-ops\nplatforms", "Compliance and\nmarketplace", "Global route and\nsensor software", "CivicLoop"]
     rows = [
         ("Citizen reporting with photo", ["F", "H", "N", "N", "F"]),
-        ("Live vehicle tracking (GPS, RFID)", ["N", "F", "N", "F", "N"]),
+        ("Live vehicle tracking (GPS)", ["N", "F", "N", "F", "F"]),
         ("Route optimisation", ["N", "F", "N", "F", "F"]),
         ("AI reads the photo", ["N", "N", "N", "H", "F"]),
         ("Closure needs an after-photo", ["H", "H", "H", "H", "F"]),
@@ -156,7 +156,7 @@ def competitors():
         fig,
         "Category-level, from public descriptions and vendor marketing, none independently tested. Government: Swachhata-MoHUA, Indore 311, MCD 311, PMC CARE, Bengaluru Anveshak. "
         "City platforms: WeVOIS, SafaiMitra, Convexicon, NEC. Compliance: Recykal. Global: Routeware, Rubicon, Enevo, Sensoneo. Our column is from our own code; its AI and risk model "
-        "are unproven on real data. See docs/pitch/competitors.md.",
+        "are unproven on real data, and we have no RFID or weighbridge. See docs/pitch/competitors.md.",
     )
     save(fig, "11_competitors.png")
 

@@ -22,6 +22,11 @@ node_modules/
 *.tsbuildinfo
 frontend/e2e/shots/
 
+# expo
+.expo/
+dist/
+expo-env.d.ts
+
 # tooling and local artefacts
 .claude/
 gdg.logger/

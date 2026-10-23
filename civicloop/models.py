@@ -11,11 +11,14 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
     Text,
+    UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
 
@@ -114,6 +117,8 @@ class User(TenantScoped, Base):
     password_hash: Mapped[str | None] = mapped_column(String(255))
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # raised to end every sign-in this person has (password change, "sign out everywhere")
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     pincode: Mapped[str | None] = mapped_column(String(6), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -124,10 +129,13 @@ class User(TenantScoped, Base):
 
 class Incident(TenantScoped, Base):
     __tablename__ = "incidents"
+    __table_args__ = (UniqueConstraint("reporter_id", "client_key", name="uq_incident_client_key"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     reporter_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
     reporter_type: Mapped[ReporterType] = mapped_column(Enum(ReporterType))
+    # sent by the app with each report, so sending the same one twice (a retry) never makes two
+    client_key: Mapped[str | None] = mapped_column(String(64))
     description: Mapped[str] = mapped_column(Text)
     latitude: Mapped[float] = mapped_column(Float)
     longitude: Mapped[float] = mapped_column(Float)
@@ -246,6 +254,16 @@ class RiskAssessment(TenantScoped, Base):
 
 class WorkOrder(TenantScoped, Base):
     __tablename__ = "work_orders"
+    __table_args__ = (
+        # one live order per incident: a second one can only be made once the first is cancelled
+        Index(
+            "uq_work_order_live_per_incident",
+            "incident_id",
+            unique=True,
+            sqlite_where=text("status != 'CANCELLED'"),
+            postgresql_where=text("status != 'CANCELLED'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     incident_id: Mapped[str] = mapped_column(ForeignKey("incidents.id"), index=True)
@@ -278,6 +296,10 @@ class RoutePlan(TenantScoped, Base):
     baseline_distance_km: Mapped[float | None] = mapped_column(Float)
     constraints: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     approved_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A route only ever groups jobs assigned to this one driver. Once approved it is theirs to see.
+    worker_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
+    vehicle_id: Mapped[str | None] = mapped_column(ForeignKey("vehicles.id"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -11,6 +11,7 @@ import { AgingChart, AttentionList, FlowChart, HotspotList, KpiCard, Workload, h
 export function Dashboard() {
   const summary = useLoad(() => api.dashboardSummary(14), []);
   const map = useLoad(() => api.dashboardMap(), []);
+  const fleet = useLoad(() => api.vehicles().catch(() => []), []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ lat: number; lon: number; stamp: number } | null>(null);
   const reloadSummary = summary.reload;
@@ -66,6 +67,10 @@ export function Dashboard() {
               <Icon name="replay" />
               Refresh
             </button>
+            <Link href="/fleet" className="btn" title="Where the vehicles are right now">
+              <Icon name="truck" />
+              {(fleet.data ?? []).length === 0 ? "Live fleet" : `${(fleet.data ?? []).filter((v) => v.state === "moving").length} of ${(fleet.data ?? []).length} moving`}
+            </Link>
             <Link href="/routes" className="btn btn-primary">
               <Icon name="route" />
               Plan routes

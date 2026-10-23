@@ -18,7 +18,7 @@ import os
 import re
 from typing import Any
 
-from sqlalchemy import event, select
+from sqlalchemy import insert, event, select
 from sqlalchemy.orm import Session, with_loader_criteria
 
 from civicloop.models import Tenant, TenantScoped, User, new_id
@@ -77,17 +77,34 @@ def default_tenant(session: Session) -> Tenant:
             return pending
     tenant = session.scalar(select(Tenant).where(Tenant.slug == DEFAULT_SLUG))
     if tenant is None:
-        tenant = Tenant(id=new_id(), name="Default city", slug=DEFAULT_SLUG)
-        session.add(tenant)
+        # Written straight away, not queued with session.add(): with foreign keys enforced the city must exist
+        # before the rows that point at it, and the unit of work does not order unrelated tables.
+        tenant_id = new_id()
+        session.execute(insert(Tenant).values(id=tenant_id, name="Default city", slug=DEFAULT_SLUG))
+        tenant = session.get(Tenant, tenant_id)
     return tenant
 
 
+REQUEST_KEY = "request_scoped"
+
+
 def bind_tenant(session: Session, tenant_id: str | None) -> None:
-    """Scope a session to one tenant (None lifts the scope, for workers and tools)."""
+    """Scope a session to one tenant (None lifts the scope, for workers and tools).
+
+    A session that serves a signed-in request is marked request-scoped, and on it None is refused: lifting the
+    scope there has to be a deliberate `lift_scope()`, so a forgotten argument can never show every city's data.
+    """
     if tenant_id is None:
+        if session.info.get(REQUEST_KEY):
+            raise RuntimeError("A request session must stay scoped to one city; use lift_scope() for cross-city routes")
         session.info.pop(TENANT_KEY, None)
     else:
         session.info[TENANT_KEY] = tenant_id
+
+
+def lift_scope(session: Session) -> None:
+    """Deliberately look across every city (platform routes and the signed-in user's own home row)."""
+    session.info.pop(TENANT_KEY, None)
 
 
 def session_tenant(session: Session) -> str | None:

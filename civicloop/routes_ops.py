@@ -40,7 +40,8 @@ from civicloop.models import (
 from civicloop.db import Base
 from civicloop.services.common import record_audit
 from civicloop.synthetic import SYNTHETIC_LIKE
-from civicloop.tenancy import bind_tenant, normalise_city, slugify
+from civicloop.images import sniff_image
+from civicloop.tenancy import bind_tenant, lift_scope, normalise_city, slugify
 from civicloop.services.municipal_integration import ManualMunicipalAdapter
 from civicloop.storage import ObjectStorageAdapter, StorageObjectNotFound
 
@@ -228,15 +229,15 @@ class ReasonRequest(BaseModel):
 
 class OverrideRequest(BaseModel):
     priority: int = Field(ge=0, le=100)
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class ClusterRequest(BaseModel):
-    candidate_ids: list[str] = Field(min_length=1)
+    candidate_ids: list[str] = Field(min_length=1, max_length=50)
 
 
 class RouteCreate(BaseModel):
-    work_order_ids: list[str] = Field(min_length=1)
+    work_order_ids: list[str] = Field(min_length=1, max_length=60)
     vehicle_capacity: float = Field(gt=0)
     depot_latitude: float | None = Field(default=None, ge=-90, le=90)
     depot_longitude: float | None = Field(default=None, ge=-180, le=180)
@@ -280,7 +281,7 @@ class SensorReadingCreate(BaseModel):
     sensor_id: str = Field(min_length=1, max_length=150)
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
-    reading: dict[str, float | int | str | bool] = Field(min_length=1)
+    reading: dict[str, float | int | str | bool] = Field(min_length=1, max_length=50)
     observed_at: datetime | None = None
 
 
@@ -289,8 +290,8 @@ class AssociateRequest(BaseModel):
 
 
 class MunicipalExport(BaseModel):
-    work_order_ids: list[str] = Field(min_length=1)
-    system_name: str = Field(min_length=1, default="municipal")
+    work_order_ids: list[str] = Field(min_length=1, max_length=500)
+    system_name: str = Field(min_length=1, max_length=100, default="municipal")
 
 
 class StatusUpdate(BaseModel):
@@ -299,8 +300,8 @@ class StatusUpdate(BaseModel):
 
 
 class MunicipalImport(BaseModel):
-    updates: list[StatusUpdate] = Field(min_length=1)
-    system_name: str = Field(min_length=1, default="municipal")
+    updates: list[StatusUpdate] = Field(min_length=1, max_length=500)
+    system_name: str = Field(min_length=1, max_length=100, default="municipal")
 
 
 class EvaluationRequest(BaseModel):
@@ -348,7 +349,7 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
 
     @router.get("/auth/me")
     def me(principal: AuthPrincipal = Depends(ctx.principal), session: Session = S) -> dict[str, Any]:
-        bind_tenant(session, None)  # a platform admin may be viewing another city; their own row lives in their home one
+        lift_scope(session)  # a platform admin may be viewing another city; their own row lives in their home one
         user = session.get(User, principal.user_id)
         home = session.get(Tenant, user.tenant_id)
         active = session.get(Tenant, principal.tenant_id)
@@ -368,7 +369,7 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
     def platform(principal: AuthPrincipal = Depends(ctx.principal), session: Session = S) -> AuthPrincipal:
         if not principal.is_platform_admin:
             raise HTTPException(status_code=403, detail="Platform administrators only")
-        bind_tenant(session, None)  # these routes look across every city
+        lift_scope(session)  # these routes look across every city
         return principal
 
     def city_row(session: Session, t: Tenant) -> dict[str, Any]:
@@ -434,6 +435,8 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
             raise HTTPException(status_code=400, detail="Choose a different city to merge into")
         if principal.tenant_id == source.id:
             raise HTTPException(status_code=400, detail="You cannot merge the city you are signed in to")
+        if source.is_active:
+            raise HTTPException(status_code=409, detail="Disable the city first, then merge it. That stops anyone adding to it while its records move.")
         moved = 0
         for mapper in Base.registry.mappers:
             model = mapper.class_
@@ -458,12 +461,14 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
                 "routes": count(RoutePlan, RoutePlan.approved_by.is_(None)),
             }
         if principal.role == UserRole.SANITATION_WORKER:
+            open_routes = sum(1 for plan in svc(session)["routes_repo"].approved_for_worker(principal.user_id) if route_dict(session, plan)["active"])
             return {
                 "work": count(
                     WorkOrder,
                     WorkOrder.assigned_to == principal.user_id,
                     WorkOrder.status.in_([WorkOrderStatus.ASSIGNED, WorkOrderStatus.IN_PROGRESS]),
-                )
+                ),
+                "routes": open_routes,
             }
         closed = [IncidentStatus.VERIFIED, IncidentStatus.REJECTED]
         return {"incidents": count(Incident, Incident.reporter_id == principal.user_id, Incident.status.not_in(closed))}
@@ -490,6 +495,15 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
             raise HTTPException(status_code=404, detail="User not found")
         if user.id == principal.user_id and (payload.role not in (None, user.role) or payload.is_active is False):
             raise HTTPException(status_code=400, detail="You cannot change your own role or deactivate yourself")
+        leaving_admin = user.role == UserRole.ADMIN and user.is_active and (
+            (payload.role is not None and payload.role != UserRole.ADMIN) or payload.is_active is False
+        )
+        if leaving_admin:
+            others = session.scalar(
+                select(func.count()).select_from(User).where(User.role == UserRole.ADMIN, User.is_active.is_(True), User.id != user.id)
+            ) or 0
+            if others == 0:
+                raise HTTPException(status_code=400, detail="A city needs at least one active administrator. Make someone else an administrator first.")
         services = svc(session)
         details: dict[str, Any] = {}
         if payload.role is not None and payload.role != user.role:
@@ -790,18 +804,35 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
 
     def route_dict(session: Session, plan: RoutePlan) -> dict[str, Any]:
         stops = []
-        for stop in svc(session)["routes_repo"].stops_for(plan.id):
-            order = session.get(WorkOrder, stop.work_order_id)
-            incident = session.get(Incident, order.incident_id) if order else None
+        stop_rows = list(svc(session)["routes_repo"].stops_for(plan.id))
+        order_ids = [s.work_order_id for s in stop_rows]
+        orders = {o.id: o for o in session.scalars(select(WorkOrder).where(WorkOrder.id.in_(order_ids)))} if order_ids else {}
+        incident_ids = {o.incident_id for o in orders.values()}
+        incidents = {i.id: i for i in session.scalars(select(Incident).where(Incident.id.in_(incident_ids)))} if incident_ids else {}
+        for stop in stop_rows:
+            order = orders.get(stop.work_order_id)
+            incident = incidents.get(order.incident_id) if order else None
+            # a stop only counts for the driver while the job is still theirs
+            reassigned = bool(order and plan.worker_id and order.assigned_to != plan.worker_id)
+            done = bool(order and order.status == WorkOrderStatus.COMPLETED)
+            cancelled = bool(order and order.status == WorkOrderStatus.CANCELLED)
             stops.append(
                 {
                     "sequence": stop.sequence,
                     "work_order_id": stop.work_order_id,
                     "planned_volume": stop.planned_volume,
                     "priority": order.priority if order else None,
+                    "order_status": order.status.value if order else None,
+                    "done": done,
+                    "reassigned": reassigned,
+                    "cancelled": cancelled,
                     "incident": incident_dict(incident) if incident else None,
                 }
             )
+        live = [st for st in stops if not st["reassigned"] and not st["cancelled"]]
+        finished = [st for st in live if st["done"]]
+        upcoming = next((st for st in live if not st["done"]), None)
+        driver = session.get(User, plan.worker_id) if plan.worker_id else None
         saving = None
         if plan.baseline_distance_km and plan.estimated_distance_km is not None and plan.baseline_distance_km > 0:
             saving = (plan.baseline_distance_km - plan.estimated_distance_km) / plan.baseline_distance_km
@@ -824,6 +855,14 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
             "baseline_distance_km": plan.baseline_distance_km,
             "saving_ratio": saving,
             "approved_by": plan.approved_by,
+            "approved_at": _iso(plan.approved_at),
+            "worker_id": plan.worker_id,
+            "worker_name": driver.name if driver else None,
+            "vehicle_id": plan.vehicle_id,
+            "stops_total": len(live),
+            "stops_done": len(finished),
+            "next_stop": upcoming["sequence"] if upcoming else None,
+            "active": plan.approved_by is not None and upcoming is not None,
             "engine_version": (plan.constraints or {}).get("engine_version"),
             "created_at": _iso(plan.created_at),
             "stops": stops,
@@ -832,6 +871,11 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
     @router.get("/routes")
     def list_routes(principal: AuthPrincipal = Depends(allow(*SUPERVISOR)), session: Session = S):
         return [route_dict(session, p) for p in svc(session)["routes_repo"].list_all()]
+
+    @router.get("/routes/mine")
+    def my_routes(principal: AuthPrincipal = Depends(allow(*WORKER)), session: Session = S):
+        """The routes a supervisor has approved for this driver. A draft is never shown until it is approved."""
+        return [route_dict(session, p) for p in svc(session)["routes_repo"].approved_for_worker(principal.user_id)]
 
     @router.post("/routes", status_code=201)
     def create_route(payload: RouteCreate, principal: AuthPrincipal = Depends(allow(*SUPERVISOR)), session: Session = S):
@@ -870,6 +914,10 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
             "baseline_distance_km": plan["baseline_km"],
             "saving_ratio": saving,
             "approved_by": None,
+            "approved_at": None,
+            "worker_id": plan["driver"].id,
+            "worker_name": plan["driver"].name,
+            "vehicle_id": None,
             "engine_version": result.engine_version,
             "created_at": None,
             "total_volume": result.total_volume,
@@ -886,10 +934,12 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
         }
 
     @router.get("/routes/{route_id}")
-    def get_route(route_id: str, principal: AuthPrincipal = Depends(allow(*SUPERVISOR)), session: Session = S):
+    def get_route(route_id: str, principal: AuthPrincipal = Depends(allow(*STAFF)), session: Session = S):
         plan = session.get(RoutePlan, route_id)
         if plan is None:
             raise HTTPException(status_code=404, detail="Route not found")
+        if principal.role not in SUPERVISOR and (plan.worker_id != principal.user_id or plan.approved_by is None):
+            raise HTTPException(status_code=404, detail="Route not found")  # not theirs, or not sent to them yet
         return route_dict(session, plan)
 
     @router.post("/routes/{route_id}/approve")
@@ -911,13 +961,14 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
         principal: AuthPrincipal = Depends(allow(*WORKER)),
         session: Session = S,
     ):
-        if not file.content_type or not file.content_type.startswith("image/"):
-            raise HTTPException(status_code=400, detail="An image upload is required")
         content = await file.read(MAX_IMAGE_BYTES + 1)
         if len(content) > MAX_IMAGE_BYTES:
             raise HTTPException(status_code=413, detail="Image exceeds 10 MB limit")
+        kind = sniff_image(content)
+        if kind is None:
+            raise HTTPException(status_code=400, detail="An image upload is required: a JPEG, PNG, WebP or HEIC photo")
         record = svc(session)["verification"].submit_evidence(
-            incident_id, principal.user_id, content, notes, file.content_type
+            incident_id, principal.user_id, content, notes, kind
         )
         session.commit()
         return verification_dict(record)
@@ -954,7 +1005,7 @@ def build_ops_router(ctx: Ctx) -> APIRouter:
             data = ctx.storage.get(asset.storage_key)
         except StorageObjectNotFound as error:
             raise HTTPException(status_code=404, detail="Photo file is missing from storage") from error
-        return Response(content=data, media_type=asset.content_type, headers={"Cache-Control": "private, max-age=300"})
+        return Response(content=data, media_type=asset.content_type, headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox"})
 
     # ----------------------------------------------------------- evaluation & pilots
 

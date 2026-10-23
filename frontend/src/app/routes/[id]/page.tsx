@@ -6,6 +6,7 @@ import { AppShell } from "@/components/AppShell";
 import { RouteMap } from "@/components/RouteMap";
 import { ErrorNote, Icon, Loading, Spinner, formatWhen, pct, shortId } from "@/components/ui";
 import { SUPERVISORS } from "@/lib/access";
+import { mapsRouteUrl } from "@/lib/maps";
 import { api } from "@/lib/api";
 import { useAction, useLoad } from "@/lib/hooks";
 
@@ -46,12 +47,14 @@ function RouteDetail() {
         <div>
           <h1>Route {shortId(plan.id)}</h1>
           <p>
+            {plan.worker_name ? `Driver ${plan.worker_name} · ` : ""}
             {plan.stops.length} stop{plan.stops.length === 1 ? "" : "s"} · built {formatWhen(plan.created_at)}
+            {plan.approved_by ? ` · ${plan.stops_done ?? 0} of ${plan.stops_total ?? plan.stops.length} done` : ""}
           </p>
         </div>
         {plan.approved_by ? (
           <span className="badge" data-status="verified">
-            Approved
+            {plan.worker_name ? `Sent to ${plan.worker_name}` : "Approved"}
           </span>
         ) : (
           <button
@@ -62,12 +65,19 @@ function RouteDetail() {
             }}
           >
             {busy && <Spinner />}
-            Approve route
+            Approve and send{plan.worker_name ? ` to ${plan.worker_name}` : ""}
           </button>
         )}
       </div>
       <ErrorNote message={actionError} />
 
+      {plan.approved_by && mapsRouteUrl(plan) && (
+        <p>
+          <a className="btn" href={mapsRouteUrl(plan)!} target="_blank" rel="noreferrer">
+            Open in Google Maps
+          </a>
+        </p>
+      )}
       <RouteMap plan={plan} />
 
       <dl className="facts stat-row">
@@ -85,7 +95,7 @@ function RouteDetail() {
         <h2 id="stops">Stops in order</h2>
         <ol className="stops">
           {plan.stops.map((stop) => (
-            <li key={stop.sequence}>
+            <li key={stop.sequence} data-done={stop.done ? "" : undefined}>
               <span className="stop-n">{stop.sequence + 1}</span>
               <div>
                 {stop.incident ? <Link href={`/incidents/${stop.incident.id}`}>{stop.incident.description}</Link> : <span className="mono">order {shortId(stop.work_order_id)}</span>}
@@ -96,6 +106,7 @@ function RouteDetail() {
                     </span>
                   )}
                   <span>{stop.planned_volume ?? 0} m³</span>
+                  {plan.approved_by && <span>{stop.done ? "Done" : stop.order_status === "in_progress" ? "In progress" : "To do"}</span>}
                 </div>
               </div>
             </li>

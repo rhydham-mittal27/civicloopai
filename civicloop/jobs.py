@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -28,6 +30,12 @@ class JobType(StrEnum):
     MUNICIPAL_IMPORT = "municipal_import"
     SENSOR_INGEST = "sensor_ingest"
     STORAGE_CLEANUP = "storage_cleanup"
+
+
+logger = logging.getLogger("civicloop.jobs")
+
+# a job still RUNNING after this long belongs to a worker that died
+STALE_AFTER = timedelta(minutes=10)
 
 
 class JobError(RuntimeError):
@@ -88,9 +96,13 @@ class InMemoryJobQueue:
         return None
 
     def retry(self, delivery: JobDelivery, delay_seconds: int) -> None:
-        if delay_seconds > 0:
-            time.sleep(delay_seconds)
-        self.enqueue(delivery.job_id, delivery.priority)
+        # a timer, not a sleep: the one worker thread must stay free for the other jobs
+        if delay_seconds <= 0:
+            self.enqueue(delivery.job_id, delivery.priority)
+            return
+        timer = threading.Timer(delay_seconds, self.enqueue, args=(delivery.job_id, delivery.priority))
+        timer.daemon = True
+        timer.start()
 
     def dead_letter(self, delivery: JobDelivery, reason: str) -> None:
         self.dead_letters.append((delivery, reason))
@@ -116,7 +128,16 @@ class RedisJobQueue:
     def enqueue(self, job_id: str, priority: str = "normal") -> None:
         self.client.rpush(self._key(priority), job_id)
 
+    def _promote_due(self) -> None:
+        """Move retries whose delay has passed back into the live lists."""
+        delayed = f"{self.prefix}:delayed"
+        for member in self.client.zrangebyscore(delayed, 0, time.time()):
+            if self.client.zrem(delayed, member):  # only one worker wins each member
+                job_id, _, priority = str(member).partition("|")
+                self.enqueue(job_id, priority or "normal")
+
     def dequeue(self) -> JobDelivery | None:
+        self._promote_due()
         for priority in ("high", "normal", "low"):
             job_id = self.client.lpop(self._key(priority))
             if job_id is not None:
@@ -133,7 +154,8 @@ class RedisJobQueue:
         return None
 
     def retry(self, delivery: JobDelivery, delay_seconds: int) -> None:
-        self.enqueue(delivery.job_id, delivery.priority)
+        # a sorted set keyed by the time the job is due, so it is not popped and re-pushed in a tight loop
+        self.client.zadd(f"{self.prefix}:delayed", {f"{delivery.job_id}|{delivery.priority}": time.time() + max(0, delay_seconds)})
 
     def dead_letter(self, delivery: JobDelivery, reason: str) -> None:
         self.client.rpush(
@@ -222,8 +244,9 @@ class JobDispatcher:
         try:
             self.queue.enqueue(job.id, priority)
         except Exception:
-            # The durable queued row remains recoverable by a republisher.
-            raise
+            # The row is saved and QUEUED, and the worker's recovery pass puts it back in the queue,
+            # so the caller is not told the work failed.
+            logger.exception("could not enqueue job %s; recovery will pick it up", job.id)
         return job
 
     def cancel(self, job_id: str, tenant_id: str | None = None) -> Job:
@@ -301,7 +324,15 @@ class JobWorker:
                     ),
                 )
                 return True
-            repository.mark_running(job, utc_now())
+            if job.status == JobStatus.RUNNING and job.started_at and utc_now() - as_utc(job.started_at) < STALE_AFTER:
+                self.queue.acknowledge(delivery)  # another worker has it right now
+                return True
+            if job.status == JobStatus.RUNNING:
+                job.status = JobStatus.QUEUED  # its worker died; take it over
+                session.flush()
+            if not repository.claim(job, utc_now()):
+                self.queue.acknowledge(delivery)  # a duplicate delivery of a job that is not waiting
+                return True
             session.commit()
             # everything the handler reads or writes belongs to the job's own city
             bind_tenant(session, job.tenant_id)

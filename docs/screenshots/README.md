@@ -1,6 +1,6 @@
 # CivicLoopAI screenshots
 
-Full-page captures of every page, signed in as each role (desktop 1440 px unless noted). Taken against the Chandigarh demo data with a platform admin signed in. Regenerate with `node e2e/screenshots.mjs ../docs/screenshots` from `frontend/` (backend on :8000, frontend on :3000).
+Full-page captures of every page, signed in as each role (desktop 1440 px unless noted). Taken against the Chandigarh demo data with a platform admin signed in and the GPS simulator driving four demo trucks. Regenerate with `node e2e/screenshots.mjs ../docs/screenshots` from `frontend/` (backend on :8000, frontend on :3000).
 
 ## Signed out
 
@@ -16,6 +16,7 @@ Full-page captures of every page, signed in as each role (desktop 1440 px unless
 
 - [Incidents](02-worker/incidents.png)
 - [My assignments](02-worker/my-assignments.png)
+- [Sharing location](02-worker/sharing-location.png)
 
 ## Supervisor
 
@@ -28,6 +29,8 @@ Full-page captures of every page, signed in as each role (desktop 1440 px unless
 - [Insights models](03-supervisor/insights-models.png)
 - [Insights pilots](03-supervisor/insights-pilots.png)
 - [Integrations](03-supervisor/integrations.png)
+- [Live fleet selected](03-supervisor/live-fleet-selected.png)
+- [Live fleet](03-supervisor/live-fleet.png)
 - [Report an incident](03-supervisor/report-an-incident.png)
 - [Route detail](03-supervisor/route-detail.png)
 - [Routes planner](03-supervisor/routes-planner.png)
@@ -44,5 +47,6 @@ Full-page captures of every page, signed in as each role (desktop 1440 px unless
 
 - [Dashboard](05-phone/dashboard.png)
 - [Incidents](05-phone/incidents.png)
+- [Live fleet](05-phone/live-fleet.png)
 - [Report an incident](05-phone/report-an-incident.png)
 - [Routes planner](05-phone/routes-planner.png)

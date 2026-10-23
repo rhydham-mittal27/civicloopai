@@ -13,7 +13,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from civicloop.models import (
@@ -42,6 +42,7 @@ OPEN = {
 }
 CLOCK_STOPPED = {IncidentStatus.RESOLVED, IncidentStatus.VERIFIED, IncidentStatus.REJECTED}
 AGE_BUCKETS = [("under 1 day", 0, 24), ("1 to 3 days", 24, 72), ("3 to 7 days", 72, 168), ("over 7 days", 168, 10**9)]
+MAX_ROWS = 50_000  # a page never reads more than this many reports, however long the city has been using the app
 GRID = 0.0045  # about 500 m of latitude
 
 
@@ -62,8 +63,8 @@ class DashboardService:
     def _incidents(self, now: datetime, history_days: int = 90) -> list[Incident]:
         synthetic = self.session.scalar(select(User.id).where(User.email.like(SYNTHETIC_LIKE)))
         since = now - timedelta(days=history_days)
-        rows = self.session.scalars(select(Incident).where(Incident.created_at >= since)).all()
-        rows += self.session.scalars(select(Incident).where(Incident.status.in_(OPEN), Incident.created_at < since)).all()
+        rows = self.session.scalars(select(Incident).where(Incident.created_at >= since).order_by(Incident.created_at.desc()).limit(MAX_ROWS)).all()
+        rows += self.session.scalars(select(Incident).where(Incident.status.in_(OPEN), Incident.created_at < since).limit(MAX_ROWS)).all()
         return [i for i in rows if i.reporter_id != synthetic or synthetic is None]
 
     def _severity_and_risk(self, ids: list[str]) -> tuple[dict[str, str | None], dict[str, float]]:
@@ -141,8 +142,10 @@ class DashboardService:
 
         # ---- dispatch and field
         orders = self.session.scalars(select(WorkOrder).where(WorkOrder.status.in_([WorkOrderStatus.DRAFT, WorkOrderStatus.APPROVED, WorkOrderStatus.ASSIGNED, WorkOrderStatus.IN_PROGRESS]))).all()
-        routed = {s.work_order_id for s in self.session.scalars(select(RouteStop))}
-        plans = self.session.scalars(select(RoutePlan)).all()
+        order_ids = [o.id for o in orders]
+        routed = set(self.session.scalars(select(RouteStop.work_order_id).where(RouteStop.work_order_id.in_(order_ids)))) if order_ids else set()
+        plans_waiting = self.session.scalar(select(func.count()).select_from(RoutePlan).where(RoutePlan.approved_by.is_(None))) or 0
+        plans_approved = self.session.scalar(select(func.count()).select_from(RoutePlan).where(RoutePlan.approved_by.is_not(None))) or 0
         unassigned = [o for o in orders if o.status == WorkOrderStatus.APPROVED]
         unrouted = [o for o in orders if o.status in {WorkOrderStatus.APPROVED, WorkOrderStatus.ASSIGNED} and o.id not in routed]
         in_field = [o for o in orders if o.status in {WorkOrderStatus.ASSIGNED, WorkOrderStatus.IN_PROGRESS}]
@@ -264,8 +267,8 @@ class DashboardService:
                 "dispatch": {
                     "unassigned_orders": len(unassigned),
                     "unrouted_orders": len(unrouted),
-                    "routes_awaiting_approval": sum(1 for p in plans if p.approved_by is None),
-                    "routes_approved": sum(1 for p in plans if p.approved_by is not None),
+                    "routes_awaiting_approval": plans_waiting,
+                    "routes_approved": plans_approved,
                 },
                 "in_field": {"jobs": len(in_field), "in_progress": sum(1 for o in in_field if o.status == WorkOrderStatus.IN_PROGRESS)},
                 "evidence_to_review": len(uncertain_evidence),

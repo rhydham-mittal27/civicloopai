@@ -18,7 +18,6 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [city, setCity] = useState("");
-  const [state, setState] = useState("");
   const [pincode, setPincode] = useState("");
   const cities = useLoad(() => (city.trim().length >= 2 ? api.cities(city.trim()).catch(() => []) : Promise.resolve([])), [city]);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +28,7 @@ export default function RegisterPage() {
     setError(null);
     setBusy(true);
     try {
-      await api.register({ name: name.trim(), email: email.trim(), password, city: city.trim(), state: state.trim() || undefined, pincode: pincode.trim() });
+      await api.register({ name: name.trim(), email: email.trim(), password, city: city.trim(), pincode: pincode.trim() });
       const { access_token } = await api.login(email.trim(), password);
       signIn(access_token);
       toast("Account created");
