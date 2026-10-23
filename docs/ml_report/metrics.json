@@ -1,0 +1,136 @@
+{
+  "risk": {
+    "data": "synthetic, 1,500 reports per city, 10 random cities",
+    "validation": "chronological, oldest 70% train / newest 30% test",
+    "per_seed": [
+      {
+        "seed": 0,
+        "positive_rate": 0.5960698689956332,
+        "formula": 0.6479473084732332,
+        "logistic": 0.6353315505373149,
+        "gbm": 0.5948224632298321
+      },
+      {
+        "seed": 1,
+        "positive_rate": 0.6196980589503954,
+        "formula": 0.6907692307692308,
+        "logistic": 0.7033693579148125,
+        "gbm": 0.6719771137952956
+      },
+      {
+        "seed": 2,
+        "positive_rate": 0.591642228739003,
+        "formula": 0.5896707459207459,
+        "logistic": 0.606631216006216,
+        "gbm": 0.6131507381507382
+      },
+      {
+        "seed": 3,
+        "positive_rate": 0.5884502923976608,
+        "formula": 0.688108834397044,
+        "logistic": 0.711718412591775,
+        "gbm": 0.6415135083257354
+      },
+      {
+        "seed": 4,
+        "positive_rate": 0.5962099125364432,
+        "formula": 0.6446482793522268,
+        "logistic": 0.6475961538461539,
+        "gbm": 0.6455845141700405
+      },
+      {
+        "seed": 5,
+        "positive_rate": 0.5856515373352855,
+        "formula": 0.6794884455856212,
+        "logistic": 0.6736618605569821,
+        "gbm": 0.6474792613075251
+      },
+      {
+        "seed": 6,
+        "positive_rate": 0.5755555555555556,
+        "formula": 0.6719208211143696,
+        "logistic": 0.6699046920821115,
+        "gbm": 0.6594086021505376
+      },
+      {
+        "seed": 7,
+        "positive_rate": 0.5859546452084857,
+        "formula": 0.6513117677024962,
+        "logistic": 0.720236882322975,
+        "gbm": 0.7017702496179318
+      },
+      {
+        "seed": 8,
+        "positive_rate": 0.5570469798657718,
+        "formula": 0.6536223957038436,
+        "logistic": 0.6590050221271941,
+        "gbm": 0.641837800208841
+      },
+      {
+        "seed": 9,
+        "positive_rate": 0.5864106351550961,
+        "formula": 0.5831245394252026,
+        "logistic": 0.6190985015966592,
+        "gbm": 0.606632277081798
+      }
+    ],
+    "auc_formula_mean": 0.6500612368444014,
+    "auc_formula_sd": 0.03553042333673525,
+    "auc_best_model_mean": 0.6653073171726717,
+    "auc_best_model_sd": 0.03580281314238103,
+    "gain_mean": 0.015246080328270262,
+    "gain_min": -0.012615757935918293,
+    "gain_max": 0.06892511462047879,
+    "cities_where_model_wins_by_0.01": 5,
+    "importance": {
+      "decayed_recency": 0.058574248599083,
+      "reports_90d": 0.040833545593479306,
+      "reports_7d": 0.025893084564442156,
+      "days_since_last": 0.01607552215995922,
+      "severity": 0.01204151808456444,
+      "reports_30d": 0.010685175751400863,
+      "has_ai_rating": 0.0,
+      "ai_confidence": -0.005457208354559359
+    }
+  },
+  "routing": {
+    "10": {
+      "pure_saving_pct_mean": 8.188574012521846,
+      "priority_saving_pct_mean": 7.809465644976509,
+      "solve_ms_mean": 2011.526346206665,
+      "urgent_stop_position_greedy": 0.5339506172839507,
+      "urgent_stop_position_priority": 0.36574074074074076,
+      "instances": 12
+    },
+    "20": {
+      "pure_saving_pct_mean": 11.096846075498826,
+      "priority_saving_pct_mean": 10.31360323129305,
+      "solve_ms_mean": 2007.4712832768757,
+      "urgent_stop_position_greedy": 0.5264097744360903,
+      "urgent_stop_position_priority": 0.3937761069340017,
+      "instances": 12
+    },
+    "30": {
+      "pure_saving_pct_mean": 15.695196383019052,
+      "priority_saving_pct_mean": 13.086487407485086,
+      "solve_ms_mean": 2008.5921088854473,
+      "urgent_stop_position_greedy": 0.5214893184720771,
+      "urgent_stop_position_priority": 0.3591906337595993,
+      "instances": 12
+    }
+  },
+  "duplicates": {
+    "data": "20 same-issue and 20 different-issue description pairs, written by hand (incl. 5 hard negatives)",
+    "auc_word_overlap": 0.49124999999999996,
+    "auc_embeddings": 0.885,
+    "word_overlap_at_0.30": {
+      "precision": 0.6,
+      "recall": 0.45
+    },
+    "embeddings_at_0.50": {
+      "precision": 0.7037037037037037,
+      "recall": 0.95
+    },
+    "embedding_model": "BAAI/bge-small-en-v1.5 (quantised ONNX, no fine-tuning)"
+  }
+}

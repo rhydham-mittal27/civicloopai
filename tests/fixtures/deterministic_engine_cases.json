@@ -1,0 +1,28 @@
+{
+  "duplicate": {
+    "source": {
+      "id": "incident-source",
+      "description": "Black bags beside market",
+      "latitude": 30.7333,
+      "longitude": 76.7794,
+      "occurred_at": "2026-10-22T09:00:00+00:00"
+    },
+    "candidate": {
+      "id": "incident-candidate",
+      "description": "black bags beside market",
+      "latitude": 30.7334,
+      "longitude": 76.7795,
+      "occurred_at": "2026-10-22T10:00:00+00:00"
+    },
+    "expected_minimum_score": 0.65
+  },
+  "risk": {
+    "target_latitude": 30.7333,
+    "target_longitude": 76.7794,
+    "cutoff_at": "2026-10-22T12:00:00+00:00"
+  },
+  "route": {
+    "vehicle_capacity": 10.0,
+    "depot": [30.7333, 76.7794]
+  }
+}

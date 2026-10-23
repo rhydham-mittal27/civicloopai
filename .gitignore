@@ -1,0 +1,32 @@
+# secrets and local config
+.env
+.env.*
+!.env.example
+
+# databases, uploads, trained models
+*.db
+*.sqlite
+*.sqlite3
+var/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# node and next
+node_modules/
+.next/
+*.tsbuildinfo
+frontend/e2e/shots/
+
+# tooling and local artefacts
+.claude/
+gdg.logger/
+*.log
+civic_services.zip
+*.zip
+# the 26 MB pitch deck stays local; add it by hand if you want it public
+Code5urge_CivicLoopAI.pptx
