@@ -484,3 +484,28 @@ def test_host_database_addresses_are_made_to_use_psycopg():
     assert normalise_database_url("postgresql://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
     assert normalise_database_url("postgresql+psycopg://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
     assert normalise_database_url("sqlite:///x.db") == "sqlite:///x.db"
+
+
+def test_supabase_addresses_get_encryption_and_the_pooler_is_recognised():
+    from civicloop.db import normalise_database_url, uses_transaction_pooler
+
+    direct = normalise_database_url("postgresql://postgres:pw@db.abcdefgh.supabase.co:5432/postgres")
+    assert direct.startswith("postgresql+psycopg://") and "sslmode=require" in direct
+    pooled = normalise_database_url("postgresql://postgres.abcdefgh:pw@aws-0-ap-south-1.pooler.supabase.com:6543/postgres")
+    assert "sslmode=require" in pooled and uses_transaction_pooler(pooled) is True
+    session_mode = normalise_database_url("postgres://postgres.abcdefgh:pw@aws-0-ap-south-1.pooler.supabase.com:5432/postgres")
+    assert uses_transaction_pooler(session_mode) is False
+    already = normalise_database_url("postgresql://u:p@db.abcdefgh.supabase.co:5432/postgres?sslmode=verify-full")
+    assert already.count("sslmode") == 1 and "verify-full" in already
+    # other hosts are left as they are
+    assert "sslmode" not in normalise_database_url("postgresql://u:p@db.internal:5432/d")
+
+
+def test_production_refuses_a_placeholder_secret_copied_from_an_example_file(tmp_path, monkeypatch):
+    from civicloop.storage import LocalFilesystemObjectStorage
+
+    monkeypatch.setenv("CIVICLOOP_ENV", "production")
+    monkeypatch.setenv("CIVICLOOP_ALLOW_SINGLE_PROCESS", "1")
+    for placeholder in ("PASTE_A_LONG_RANDOM_SECRET_PASTE_A_LONG", "replace-with-a-random-32-character-secret"):
+        with pytest.raises(ValueError, match="placeholder"):
+            create_app(database_url=f"sqlite:///{tmp_path / 'p.db'}", auth_secret=placeholder, storage=LocalFilesystemObjectStorage(tmp_path / "up"), queue=InMemoryJobQueue())

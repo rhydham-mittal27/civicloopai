@@ -5,52 +5,36 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "civicloop"
 version = "0.1.0"
-description = "Persistence layer for CivicLoopAI"
+description = "CivicLoopAI backend: API, services, engines and jobs"
 requires-python = ">=3.11"
+# Everything the API needs to run in production. `uv sync` installs it; Render installs the same set from requirements.txt.
 dependencies = [
     "SQLAlchemy>=2.0,<3.0",
+    "fastapi>=0.115",
+    "python-multipart>=0.0.9",
+    "uvicorn>=0.30",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    "google-genai>=1.0",
+    "redis>=5.0",
+    "boto3>=1.34",
+    "numpy>=1.26",
+    "scikit-learn>=1.4",
+    "ortools>=9.9",
 ]
 
 [project.optional-dependencies]
+# Better duplicate-report matching (downloads a small model; wants about 1 GB of memory). Without it the app falls back to word overlap.
+embeddings = ["fastembed>=0.3"]
+
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",
 ]
 
-storage = [
-    "boto3>=1.34",
-]
-
-ai = [
-    "google-genai>=1.0",
-]
-
-queue = [
-    "redis>=5.0",
-]
-
-postgres = [
-    "psycopg[binary]>=3.1",
-]
-
-migrations = [
-    "alembic>=1.13",
-]
-
-ml = [
-    "numpy>=1.26",
-    "scikit-learn>=1.4",
-    "ortools>=9.9",
-    "fastembed>=0.3",
-]
-
-api = [
-    "fastapi>=0.115",
-    "python-multipart>=0.0.9",
-    "uvicorn>=0.30",
-]
-
 [tool.setuptools.packages.find]
 include = ["civicloop*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

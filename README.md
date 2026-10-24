@@ -216,18 +216,18 @@ for real photo analysis. Everything else works without it.
 
 ### 6.1 Backend
 
+The backend uses [uv](https://docs.astral.sh/uv/) (`pip install uv` once). `uv sync` builds the environment from `uv.lock`; put `uv run` in front of a command to use it, with nothing to activate.
+
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate      macOS/Linux: source .venv/bin/activate
 cd backend
-pip install -e ".[api,ai,ml,migrations,queue,storage,postgres,dev]"     # or: pip install -r requirements.txt
+uv sync
 
 cp .env.example .env          # then edit: set GEMINI_API_KEY and a real CIVICLOOP_AUTH_SECRET
-uvicorn civicloop.api:app --host 127.0.0.1 --port 8000
+uv run uvicorn civicloop.api:app --host 127.0.0.1 --port 8000
 ```
 
 The first run creates the SQLite database. For a shared database, set `CIVICLOOP_DATABASE_URL` to PostgreSQL and run
-`alembic upgrade head`. In production the API refuses to start if the database is not at the latest migration.
+`uv run alembic upgrade head`. In production the API refuses to start if the database is not at the latest migration.
 
 **Create the first administrator** from the command line. An address listed in `CIVICLOOP_PLATFORM_ADMINS` cannot be
 claimed through the sign-up form, which is how the first platform admin is made:
@@ -236,16 +236,16 @@ claimed through the sign-up form, which is how the first platform admin is made:
 # from backend/
 CIVICLOOP_PLATFORM_ADMINS=admin@civic.test \
 CIVICLOOP_ADMIN_PASSWORD='admin-pass-12345' \
-python -m civicloop.make_admin --email admin@civic.test --name "Meera Admin" --city Chandigarh --pincode 160017
+uv run python -m civicloop.make_admin --email admin@civic.test --name "Meera Admin" --city Chandigarh --pincode 160017
 ```
 
 **Load demo data** (clearly labelled as simulated or demo):
 
 ```bash
 # from backend/
-python -m civicloop.ml_tools seed --city Chandigarh      # 1,500 SIMULATED reports for training the risk model
-python -m civicloop.demo --city Chandigarh               # sites, work orders and two demo routes
-python -m civicloop.ml_tools train --city Chandigarh     # trains the risk model; deploys it only if it beats the formula
+uv run python -m civicloop.ml_tools seed --city Chandigarh   # 1,500 SIMULATED reports for training the risk model
+uv run python -m civicloop.demo --city Chandigarh            # sites, work orders and two demo routes
+uv run python -m civicloop.ml_tools train --city Chandigarh  # trains the risk model; deploys it only if it beats the formula
 ```
 
 ### 6.2 Web app
@@ -285,7 +285,7 @@ After that, only that city's admins can create supervisors, drivers and other ad
 The backend stays on your computer and the phone talks to it over Wi-Fi.
 
 1. Install **Expo Go** from the Play Store or App Store. You need Node 22 or newer on the computer.
-2. Start the backend so the phone can reach it: `cd backend && uvicorn civicloop.api:app --host 0.0.0.0 --port 8000`.
+2. Start the backend so the phone can reach it: `cd backend && uv run uvicorn civicloop.api:app --host 0.0.0.0 --port 8000`.
 3. Find your computer's address with `ipconfig` (Windows) or `ifconfig` (macOS/Linux), for example `192.168.1.20`.
 4. Allow port 8000 through the firewall, or the phone cannot connect.
 5. Start an app:
@@ -310,7 +310,8 @@ All settings are environment variables. [`backend/.env.example`](backend/.env.ex
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `CIVICLOOP_DATABASE_URL` | `sqlite:///civicloop.db` | SQLite for development, PostgreSQL for production (`postgres://` and `postgresql://` addresses from a host are accepted) |
+| `CIVICLOOP_DATABASE_URL` | `sqlite:///civicloop.db` | SQLite for development, PostgreSQL for production (`postgres://` and `postgresql://` addresses from Render or Supabase are accepted; for Supabase use the Session pooler address) |
+| `CIVICLOOP_DB_POOL_SIZE`, `CIVICLOOP_DB_MAX_OVERFLOW` | `5`, `5` | Connection pool for PostgreSQL; hosted databases allow few connections |
 | `CIVICLOOP_AUTH_SECRET` | random per process (dev) | Signs sign-in tokens. **Required in production** (32+ characters). |
 | `CIVICLOOP_ENV` | `development` | `production` refuses to start without a secret, with in-memory storage or queue, or on an out-of-date database |
 | `CIVICLOOP_TOKEN_TTL_SECONDS` | `43200` | Sign-in lifetime (12 hours) |
@@ -395,7 +396,7 @@ still open are in [`docs/FMEA.md`](docs/FMEA.md).
 | **Who you are** | scrypt passwords; signed tokens; role and active state read from the database on every call; `POST /auth/logout-all` ends every session; platform-admin emails cannot be claimed by sign-up |
 | **Which city** | Every read filtered and every write stamped by city; the scope cannot be dropped by accident |
 | **What is allowed** | State machines in the server; one live work order per incident; imports cannot skip steps; one route per driver; the last admin cannot be removed |
-| **What is stored** | Foreign keys, write-ahead log and lock wait on SQLite; unique keys make retries safe (`Idempotency-Key` on report creation); the schema version is checked at start in production |
+| **What is stored** | On PostgreSQL (Supabase) every table has row-level security switched on with no policies and no access for the hosted API roles; foreign keys, write-ahead log and lock wait on SQLite; unique keys make retries safe (`Idempotency-Key` on report creation); the schema version is checked at start in production |
 | **What happened** | Audit log of every change; jobs stuck or lost after a crash are recovered; models are written atomically; failures are logged, not swallowed |
 
 ![Reliability](docs/pitch2/14_reliability.png)
@@ -441,7 +442,7 @@ Where each collection vehicle is, from a crew phone or a hardware GPS tracker.
 - **State** is worked out on the server: `moving`, `idle`, `stale`, `offline`, `no_signal`. History keeps 7 days.
 - **Keys** are stored as hashes, shown once and revocable. A vehicle's position update takes a row lock so a phone and a tracker
   cannot corrupt each other's distance count. A tracker is limited to 240 requests a minute.
-- **Demo simulator:** `python -m civicloop.gps_sim --email <supervisor> --password <pw> --vehicles 4` drives demo trucks between
+- **Demo simulator:** `uv run python -m civicloop.gps_sim --email <supervisor> --password <pw> --vehicles 4` drives demo trucks between
   sites through the real tracker endpoint (straight lines, not roads).
 - **One source per vehicle.** If a phone and a tracker report the same vehicle from different places, the server sees impossible
   jumps and drops the later one.
@@ -473,7 +474,7 @@ Interactive docs are served by FastAPI at `/docs`. Everything is under `/api/v1`
 ## 15. Testing
 
 ```bash
-cd backend && python -m pytest -q  # 123 backend tests (see below)
+cd backend && uv run pytest -q    # 123 backend tests (see below)
 cd ..
 cd frontend
 npm run lint && npx tsc --noEmit
@@ -513,7 +514,7 @@ backend/                   the API, deployable on its own (see backend/README.md
     demo.py  gps_sim.py    demo data and the GPS simulator
   migrations/              Alembic revisions 0001 to 0007
   tests/                   pytest suite (123 tests)
-  requirements.txt  pyproject.toml  alembic.ini  .env.example  .python-version
+  pyproject.toml  uv.lock  requirements.txt  alembic.ini  .env.example  .python-version
 frontend/                  Next.js app (src/app pages, api/v1 proxy route, src/components incl. map/, src/lib, e2e/)
 mobile/                    Expo apps: apps/resident, apps/crew, shared packages/ (core, ui, features)
 scripts/                   ml_report.py, pitch_figures*.py, pitch2_figures.py, record_demo.py
@@ -587,10 +588,10 @@ cannot finish is skipped with a message so a partial demo is still produced. See
 
 | Symptom | Fix |
 | --- | --- |
-| `no such column ...` after pulling new code | The database is older than the code. Run `alembic upgrade head`, or delete a development database. Production refuses to start in this state. |
+| `no such column ...` after pulling new code | The database is older than the code. Run `uv run alembic upgrade head`, or delete a development database. Production refuses to start in this state. |
 | API refuses to start in production | It needs `CIVICLOOP_AUTH_SECRET`, a non-memory storage and queue backend, and an up-to-date database (see [section 7](#7-configuration)). |
 | 429 "Too many attempts" on sign-in | Wrong passwords were tried too often. Wait a few minutes, or raise `CIVICLOOP_LOGIN_ATTEMPTS` for a test run. |
-| "This address is reserved" when registering an admin | That email is in `CIVICLOOP_PLATFORM_ADMINS`. Create it with `python -m civicloop.make_admin`. |
+| "This address is reserved" when registering an admin | That email is in `CIVICLOOP_PLATFORM_ADMINS`. Create it with `uv run python -m civicloop.make_admin`. |
 | Phone app cannot reach the server | Same Wi-Fi, backend started with `--host 0.0.0.0`, port 8000 open in the firewall, and the address typed on the sign-in screen. |
 | Route planner says "No assigned jobs are waiting" | Routes only group jobs already assigned to a driver. Assign approved work orders first. |
 | AI analysis returns 502 or is disabled | Check `CIVICLOOP_AI_PROVIDER` and `GEMINI_API_KEY`, and the Gemini quota. The rest of the app works without it. |

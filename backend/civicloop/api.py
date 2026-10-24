@@ -199,6 +199,8 @@ def create_app(
         # Development: a fresh random secret per process, never a published constant.
         logger.warning("CIVICLOOP_AUTH_SECRET is not set: using a random secret for this process, so sign-ins end when it restarts")
         secret = secrets.token_urlsafe(48)
+    if production and any(mark in secret.lower() for mark in ("paste_", "replace-with", "changeme", "your-secret")):
+        raise ValueError("CIVICLOOP_AUTH_SECRET is still a placeholder from an example file: set a real random secret (32+ characters)")
     # Sign-in lasts 12 hours by default (a working shift); CIVICLOOP_TOKEN_TTL_SECONDS changes it.
     authenticator = TokenAuthenticator(secret, ttl_seconds=int(os.getenv("CIVICLOOP_TOKEN_TTL_SECONDS", str(12 * 3600))))
     # An in-memory queue is private to this process, so the API runs the worker itself.

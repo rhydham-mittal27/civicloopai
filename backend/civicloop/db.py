@@ -1,9 +1,11 @@
+import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
 from sqlalchemy import create_engine as sqlalchemy_create_engine
 from sqlalchemy import event
+from sqlalchemy.engine import make_url
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -13,11 +15,23 @@ class Base(DeclarativeBase):
 
 
 def normalise_database_url(database_url: str) -> str:
-    """Hosts such as Render hand out `postgres://` or `postgresql://` addresses; this app talks to PostgreSQL with psycopg 3."""
+    """Hosts such as Render and Supabase hand out `postgres://` or `postgresql://` addresses; this app talks to PostgreSQL
+    with psycopg 3. A Supabase address also gets `sslmode=require`, because it only accepts encrypted connections."""
     for old in ("postgres://", "postgresql://"):
         if database_url.startswith(old):
-            return "postgresql+psycopg://" + database_url[len(old):]
+            database_url = "postgresql+psycopg://" + database_url[len(old):]
+            break
+    if database_url.startswith("postgresql+psycopg://"):
+        parsed = make_url(database_url)
+        if (parsed.host or "").endswith((".supabase.co", ".supabase.com")) and "sslmode" not in parsed.query:
+            database_url = parsed.update_query_dict({"sslmode": "require"}).render_as_string(hide_password=False)
     return database_url
+
+
+def uses_transaction_pooler(database_url: str) -> bool:
+    """Supabase's transaction pooler (port 6543) and PgBouncer cannot keep prepared statements between queries."""
+    parsed = make_url(database_url)
+    return parsed.port == 6543 or "pgbouncer" in parsed.query
 
 
 def create_engine(database_url: str = "sqlite:///civicloop.db", **kwargs: Any) -> Engine:
@@ -37,10 +51,13 @@ def create_engine(database_url: str = "sqlite:///civicloop.db", **kwargs: Any) -
                 cursor.close()
 
         return engine
-    kwargs.setdefault("pool_size", 20)
-    kwargs.setdefault("max_overflow", 10)
+    # Hosted databases allow only a few connections (Supabase's pooler on the free plan: about 15), so keep the pool small.
+    kwargs.setdefault("pool_size", int(os.getenv("CIVICLOOP_DB_POOL_SIZE", "5")))
+    kwargs.setdefault("max_overflow", int(os.getenv("CIVICLOOP_DB_MAX_OVERFLOW", "5")))
     kwargs.setdefault("pool_pre_ping", True)
     kwargs.setdefault("pool_recycle", 1800)
+    if uses_transaction_pooler(database_url):
+        kwargs.setdefault("connect_args", {"prepare_threshold": None})
     return sqlalchemy_create_engine(database_url, **kwargs)
 
 
