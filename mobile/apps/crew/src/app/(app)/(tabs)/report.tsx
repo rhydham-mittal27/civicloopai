@@ -9,10 +9,10 @@ export default function ReportFromTheField() {
       <ReportForm
         reporterType="field_worker"
         draftKey="civicloop.crew.draft"
-        onCreated={(incident, failed) =>
+        onCreated={(incident, failed, reason) =>
           router.push({
             pathname: "/incident/[id]",
-            params: { id: incident.id, ...(failed ? { notice: `${failed} photo${failed > 1 ? "s" : ""} did not upload. Add ${failed > 1 ? "them" : "it"} again below.` } : {}) },
+            params: { id: incident.id, ...(failed ? { notice: `${failed} photo${failed > 1 ? "s" : ""} did not upload. Add ${failed > 1 ? "them" : "it"} again below.${reason ? ` (${reason})` : ""}` } : {}) },
           })
         }
       />

@@ -101,18 +101,47 @@ export function createApi(config: ApiConfig) {
 
   const post = <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
+  /**
+   * Sends a photo. In a browser the picked file is fetched into a real Blob. On a phone the file stays where it is and
+   * React Native's own XMLHttpRequest streams it from there: the global fetch on current Expo versions does not understand a
+   * {uri, name, type} file entry, which is why photos silently failed to upload.
+   */
   async function upload<T>(path: string, file: UploadFile, fields: Record<string, string> = {}) {
     const form = new FormData();
-    if (typeof document !== "undefined") {
-      // A browser needs the real bytes: fetch the picked file's address and send that.
+    const onPhone = typeof navigator !== "undefined" && navigator.product === "ReactNative";
+    if (!onPhone && typeof document !== "undefined") {
       const blob = await (await fetch(file.uri)).blob();
       form.append("file", blob, file.name);
     } else {
-      // React Native reads a {uri, name, type} object straight from the phone's storage.
       form.append("file", file as unknown as Blob);
     }
     Object.entries(fields).forEach(([key, value]) => form.append(key, value));
-    return request<T>(path, { method: "POST", body: form, upload: true });
+    if (!onPhone) return request<T>(path, { method: "POST", body: form, upload: true });
+
+    const base = normaliseServerUrl(config.baseUrl());
+    if (!base) throw new ApiError("Set the server address first.", 0);
+    const auth = await authHeaders();
+    return new Promise<T>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${root()}${path}`);
+      xhr.setRequestHeader("Accept", "application/json");
+      if (auth.Authorization) xhr.setRequestHeader("Authorization", auth.Authorization);
+      xhr.timeout = timeout * 4;
+      xhr.onload = async () => {
+        let body: unknown = null;
+        try {
+          body = JSON.parse(xhr.responseText);
+        } catch {
+          /* not JSON */
+        }
+        if (xhr.status >= 200 && xhr.status < 300) return resolve(body as T);
+        if (xhr.status === 401 && (await config.getToken())) config.onUnauthorized?.();
+        reject(new ApiError(messageFrom(body, `Request failed (${xhr.status})`), xhr.status));
+      };
+      xhr.onerror = () => reject(new ApiError("Cannot reach the server. Check your connection and the server address.", 0));
+      xhr.ontimeout = () => reject(new ApiError("The server took too long to answer. Try again.", 0));
+      xhr.send(form);
+    });
   }
 
   return {

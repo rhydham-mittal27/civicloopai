@@ -14,8 +14,8 @@ interface Props {
   reporterType: ReporterType;
   /** Where a half-written description is kept if the app is closed by accident. */
   draftKey: string;
-  /** Called once the report exists. `photosFailed` is how many photos did not upload. */
-  onCreated: (incident: Incident, photosFailed: number) => void;
+  /** Called once the report exists. `photosFailed` is how many photos did not upload, and `reason` is why the first one failed. */
+  onCreated: (incident: Incident, photosFailed: number, reason?: string) => void;
 }
 
 /** A short random key that is the same for every attempt at sending one report. */
@@ -98,15 +98,17 @@ export function ReportForm({ reporterType, draftKey, onCreated }: Props) {
         pincode: pincode || undefined,
       }, sendKey.current);
       let failed = 0;
+      let reason: string | undefined;
       for (let i = 0; i < photos.length; i++) {
         setProgress(`Uploading photo ${i + 1} of ${photos.length}…`);
         try {
           await api.uploadMedia(incident.id, photos[i]!);
-        } catch {
+        } catch (e) {
           failed++;
+          reason ??= e instanceof Error ? e.message : String(e);
         }
       }
-      return { incident, failed };
+      return { incident, failed, reason };
     });
     setProgress(null);
     if (!made) return;
@@ -117,7 +119,7 @@ export function ReportForm({ reporterType, draftKey, onCreated }: Props) {
     setPin(null);
     setAccuracy(null);
     setTypedPincode(null);
-    onCreated(made.incident, made.failed);
+    onCreated(made.incident, made.failed, made.reason);
   };
 
   return (
