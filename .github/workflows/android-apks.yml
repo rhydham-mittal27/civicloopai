@@ -10,6 +10,9 @@ on:
       - "mobile/**"
       - ".github/workflows/android-apks.yml"
 
+permissions:
+  contents: write
+
 concurrency:
   group: android-apks-${{ github.ref }}
   cancel-in-progress: true
@@ -79,3 +82,11 @@ jobs:
           path: civicloop-${{ matrix.app }}-release.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish the APK for direct download (no GitHub sign-in needed)
+        # Both apps attach to one public release called apk-latest, so the monitor page can link straight to the file.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view apk-latest >/dev/null 2>&1 || gh release create apk-latest --title "Latest phone apps" --notes "Newest CivicLoop and CivicLoop Crew APKs, rebuilt on every change under mobile/." --prerelease || gh release view apk-latest >/dev/null
+          gh release upload apk-latest "civicloop-${{ matrix.app }}-release.apk" --clobber

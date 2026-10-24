@@ -49,7 +49,7 @@ function analyse(name, run, jobs) {
   else if (job.status === "in_progress") Object.assign(out, { state: "running", stage: current || "Working", percent: Math.min(out.percent, 97) });
   else if (job.conclusion === "success") {
     Object.assign(out, { state: "done", percent: 100, stage: "Build complete" });
-    out.apk = { file: `civicloop-${name}-release-apk`, mb: 0, url: run.html_url };
+    out.apk = { file: `civicloop-${name}-release.apk`, mb: 0, url: `https://github.com/${REPO}/releases/download/apk-latest/civicloop-${name}-release.apk` };
   } else {
     const bad = (steps.find((s) => s.conclusion === "failure") || {}).name || "a step";
     Object.assign(out, { state: "failed", stage: "Build failed", error: `The step "${bad}" failed. Open the run on GitHub for the full log: ${run.html_url}` });
