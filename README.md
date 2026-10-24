@@ -327,7 +327,8 @@ All settings are environment variables. [`backend/.env.example`](backend/.env.ex
 | `CIVICLOOP_EMBEDDINGS` | on | `off` skips the embedding model download |
 | `CIVICLOOP_PLATFORM_ADMINS` | empty | Comma-separated admin emails who can manage all cities (and cannot be claimed by sign-up) |
 | `CIVICLOOP_ADMIN_PASSWORD` | | Read by `python -m civicloop.make_admin` (or it asks at a prompt) |
-| `BACKEND_URL` | `http://127.0.0.1:8000` | Where the web app's proxy sends `/api/v1` |
+| `BACKEND_URL` | `http://127.0.0.1:8000` | Where the web app's proxy sends `/api/v1` (set in `frontend/.env.local`, or in the web host's environment) |
+| `CIVICLOOP_CORS_ORIGINS` | unset (off) | Browser origins allowed to call the API directly. The web app and phone apps do not need it. |
 | `EXPO_PUBLIC_API_URL` | unset | Default server address for the phone apps |
 | `CIVICLOOP_ALLOW_HTTP` | unset | Build-time: lets an Android development build use a plain `http://` server on your Wi-Fi |
 

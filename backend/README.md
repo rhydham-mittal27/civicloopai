@@ -127,7 +127,18 @@ on the Users page. Optional demo data: `CIVICLOOP_DATABASE_URL=... uv run python
 - **Phone apps:** start them with `EXPO_PUBLIC_API_URL=https://<your-api>.onrender.com`, or type the address on the sign-in screen.
   Render serves HTTPS, so no special build settings are needed.
 
-### 6. Check it works
+### 6. Cross-origin browser access (CORS), only if you need it
+
+You normally do not. The web app reaches the API through its own server, and the phone apps are not browsers, so neither triggers CORS. Only a browser app
+that calls the API directly from another address needs it. Set `CIVICLOOP_CORS_ORIGINS` to that app's address (comma separated, no trailing slash):
+
+```
+CIVICLOOP_CORS_ORIGINS=https://my-frontend.onrender.com
+```
+
+It is off by default, and a browser from any address not listed is refused.
+
+### 7. Check it works
 
 `https://<your-api>.onrender.com/health` returns `{"status":"ok"}`, and `/docs` lists the routes. In the logs you should see the
 migrations run, then Uvicorn start.

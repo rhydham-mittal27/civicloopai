@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
@@ -222,6 +223,18 @@ def create_app(
             worker_thread.stop()
 
     app = FastAPI(title="CivicLoopAI API", version="1.1.0", lifespan=lifespan)
+    # Off by default. The web app and the phone apps do not need it (the web app reaches the API through its own server,
+    # and phones are not browsers). Turn it on only for a browser app that calls this API directly, by listing its address.
+    cors_origins = [origin.strip().rstrip("/") for origin in os.getenv("CIVICLOOP_CORS_ORIGINS", "").split(",") if origin.strip()]
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Tenant-Id", "X-Device-Key"],
+            allow_credentials=False,  # sign-in is a bearer token, not a cookie
+            max_age=600,
+        )
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.storage = storage

@@ -509,3 +509,22 @@ def test_production_refuses_a_placeholder_secret_copied_from_an_example_file(tmp
     for placeholder in ("PASTE_A_LONG_RANDOM_SECRET_PASTE_A_LONG", "replace-with-a-random-32-character-secret"):
         with pytest.raises(ValueError, match="placeholder"):
             create_app(database_url=f"sqlite:///{tmp_path / 'p.db'}", auth_secret=placeholder, storage=LocalFilesystemObjectStorage(tmp_path / "up"), queue=InMemoryJobQueue())
+
+
+# ------------------------------------------------------------------ cross-origin browser access is opt-in
+
+
+def test_cors_is_off_unless_origins_are_listed(tmp_path, monkeypatch):
+    ask = {"Origin": "https://app.example.org", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type,authorization"}
+    monkeypatch.delenv("CIVICLOOP_CORS_ORIGINS", raising=False)
+    with TestClient(build(tmp_path)) as client:
+        off = client.options("/api/v1/auth/login", headers=ask)
+        assert "access-control-allow-origin" not in off.headers
+
+    monkeypatch.setenv("CIVICLOOP_CORS_ORIGINS", "https://app.example.org/, https://other.example.org")
+    with TestClient(build(tmp_path)) as client:
+        listed = client.options("/api/v1/auth/login", headers=ask)
+        assert listed.status_code == 200 and listed.headers["access-control-allow-origin"] == "https://app.example.org"
+        assert "authorization" in listed.headers["access-control-allow-headers"].lower()
+        stranger = client.options("/api/v1/auth/login", headers={**ask, "Origin": "https://evil.example.com"})
+        assert "access-control-allow-origin" not in stranger.headers
