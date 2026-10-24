@@ -40,7 +40,12 @@ const config: ExpoConfig = {
       },
     ],
     ...(mapsKey ? ([["react-native-maps", { androidGoogleMapsApiKey: mapsKey }]] as ExpoConfig["plugins"] & unknown[]) : []),
-    ...(allowHttp ? ([["expo-build-properties", { android: { usesCleartextTraffic: true } }]] as ExpoConfig["plugins"] & unknown[]) : []),
+    // Release builds must not shrink the code: R8 removes a class that WorkManager (pulled in by a native library) looks up by name,
+    // and the app then crashes the moment it opens. Plain http:// servers are allowed only for development builds.
+    [
+      "expo-build-properties",
+      { android: { enableMinifyInReleaseBuilds: false, enableShrinkResourcesInReleaseBuilds: false, ...(allowHttp ? { usesCleartextTraffic: true } : {}) } },
+    ],
   ],
 };
 

@@ -31,7 +31,12 @@ const config: ExpoConfig = {
     ["expo-image-picker", { photosPermission: "CivicLoop uses your photos so you can add pictures to a report.", cameraPermission: "CivicLoop uses the camera so you can photograph the waste.", microphonePermission: false }],
     ["expo-location", { locationWhenInUsePermission: "CivicLoop uses your location to mark where the waste is." }],
     ...(mapsKey ? ([["react-native-maps", { androidGoogleMapsApiKey: mapsKey }]] as ExpoConfig["plugins"] & unknown[]) : []),
-    ...(allowHttp ? ([["expo-build-properties", { android: { usesCleartextTraffic: true } }]] as ExpoConfig["plugins"] & unknown[]) : []),
+    // Release builds must not shrink the code: R8 removes a class that WorkManager (pulled in by a native library) looks up by name,
+    // and the app then crashes the moment it opens. Plain http:// servers are allowed only for development builds.
+    [
+      "expo-build-properties",
+      { android: { enableMinifyInReleaseBuilds: false, enableShrinkResourcesInReleaseBuilds: false, ...(allowHttp ? { usesCleartextTraffic: true } : {}) } },
+    ],
   ],
 };
 
