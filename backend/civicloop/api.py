@@ -184,8 +184,10 @@ def create_app(
         # these two default to memory for development; in production they would silently lose photos and jobs on restart
         if isinstance(storage, InMemoryObjectStorage):
             raise ValueError("Set CIVICLOOP_STORAGE_BACKEND to local or s3 in production: in-memory storage loses every photo on restart")
-        if isinstance(queue, InMemoryJobQueue):
-            raise ValueError("Set CIVICLOOP_QUEUE_BACKEND=redis in production and run `python -m civicloop.worker`: an in-memory queue loses jobs on restart")
+        if isinstance(queue, InMemoryJobQueue) and not os.getenv("CIVICLOOP_ALLOW_SINGLE_PROCESS"):
+            # With one API process the in-memory queue is fine: jobs live in the database and are re-queued after a restart.
+            # With several processes (or a separate worker) each would have its own queue, so use Redis instead.
+            raise ValueError("Set CIVICLOOP_QUEUE_BACKEND=redis and run `python -m civicloop.worker`, or set CIVICLOOP_ALLOW_SINGLE_PROCESS=1 to run one API process with the in-memory queue")
     login_limiter = AttemptLimiter(int(os.getenv("CIVICLOOP_LOGIN_ATTEMPTS", "8")), 300)
     register_limiter = AttemptLimiter(int(os.getenv("CIVICLOOP_REGISTER_LIMIT", "60")), 3600)
     if analysis_adapter_factory is None and os.getenv("CIVICLOOP_AI_PROVIDER"):

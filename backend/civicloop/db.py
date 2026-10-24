@@ -12,8 +12,17 @@ class Base(DeclarativeBase):
     """Base class for all CivicLoop database models."""
 
 
+def normalise_database_url(database_url: str) -> str:
+    """Hosts such as Render hand out `postgres://` or `postgresql://` addresses; this app talks to PostgreSQL with psycopg 3."""
+    for old in ("postgres://", "postgresql://"):
+        if database_url.startswith(old):
+            return "postgresql+psycopg://" + database_url[len(old):]
+    return database_url
+
+
 def create_engine(database_url: str = "sqlite:///civicloop.db", **kwargs: Any) -> Engine:
     """Create a SQLAlchemy engine for SQLite or another supported backend."""
+    database_url = normalise_database_url(database_url)
     if database_url.startswith("sqlite"):
         kwargs.setdefault("connect_args", {"check_same_thread": False, "timeout": 10})
         engine = sqlalchemy_create_engine(database_url, **kwargs)

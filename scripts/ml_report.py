@@ -32,7 +32,7 @@ from sklearn.metrics import average_precision_score, precision_recall_curve, roc
 from sqlalchemy import select  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "backend"))
 os.environ.setdefault("CIVICLOOP_MODEL_DIR", tempfile.mkdtemp(prefix="civicloop-report-"))
 
 from civicloop.db import create_engine, create_session_factory, init_db  # noqa: E402

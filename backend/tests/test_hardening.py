@@ -463,3 +463,24 @@ def test_alembic_builds_a_database_the_code_accepts(tmp_path, monkeypatch):
     columns = {c["name"] for c in inspect(engine).get_columns("users")}
     assert "token_version" in columns
     assert "client_key" in {c["name"] for c in inspect(engine).get_columns("incidents")}
+
+
+# ------------------------------------------------------------------ deploying on a host such as Render
+
+
+def test_one_process_may_use_the_in_memory_queue_when_it_says_so(tmp_path, monkeypatch):
+    from civicloop.storage import LocalFilesystemObjectStorage
+
+    monkeypatch.setenv("CIVICLOOP_ENV", "production")
+    monkeypatch.setenv("CIVICLOOP_ALLOW_SINGLE_PROCESS", "1")
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'p.db'}", auth_secret=SECRET, storage=LocalFilesystemObjectStorage(tmp_path / "up"), queue=InMemoryJobQueue())
+    assert app.title == "CivicLoopAI API"
+
+
+def test_host_database_addresses_are_made_to_use_psycopg():
+    from civicloop.db import normalise_database_url
+
+    assert normalise_database_url("postgres://u:p@h:5432/d") == "postgresql+psycopg://u:p@h:5432/d"
+    assert normalise_database_url("postgresql://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
+    assert normalise_database_url("postgresql+psycopg://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
+    assert normalise_database_url("sqlite:///x.db") == "sqlite:///x.db"

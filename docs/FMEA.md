@@ -17,7 +17,7 @@ Scoring: Severity (S), Likelihood (L), Detectability (D, where 10 = nobody would
 
 ## 0. Fix status (updated 2026-10-24, after the fixes)
 
-Every row below was worked on; the table in section 2 is kept as it was found so you can see what each fix answers. 118 backend tests pass (93 earlier + 25 new in `tests/test_hardening.py`, plus a last-admin test in `tests/test_tenancy.py`); the full chain of migrations 0001 to 0007 builds a database the code accepts, and the web sign-in change was checked in a real browser.
+Every row below was worked on; the table in section 2 is kept as it was found so you can see what each fix answers. 118 backend tests pass (93 earlier + 25 new in `backend/tests/test_hardening.py`, plus a last-admin test in `backend/tests/test_tenancy.py`); the full chain of migrations 0001 to 0007 builds a database the code accepts, and the web sign-in change was checked in a real browser.
 
 | ID | Status | What changed and where | What is still true |
 |---|---|---|---|
@@ -31,7 +31,7 @@ Every row below was worked on; the table in section 2 is kept as it was found so
 | F-08 | Fixed in code, not run | Gemini client gets a 30 s HTTP timeout (`ai.py`) | The `google-genai` package is not installed in this Python, so that line was not executed here. |
 | F-09 | Fixed | A session serving a signed-in request refuses `bind_tenant(None)`; the platform routes and `/auth/me` use the explicit `lift_scope()` | Reads are still filtered by one hook, not by the database (no row-level security). A route-by-route cross-city walk test was not added. |
 | F-10 | Fixed | `municipal_integration.IMPORTABLE`: only real moves are accepted; others are skipped and show up as `received` minus `imported` | |
-| F-11 | Fixed | New `civicloop/images.py`: JPEG, PNG, WebP and HEIC are recognised by their first bytes, stored under the real type, and photos are served with `nosniff` and a sandbox policy | |
+| F-11 | Fixed | New `backend/civicloop/images.py`: JPEG, PNG, WebP and HEIC are recognised by their first bytes, stored under the real type, and photos are served with `nosniff` and a sandbox policy | |
 | F-12 | Fixed | `Idempotency-Key` header on `POST /incidents`, unique `(reporter_id, client_key)`; the web form and both mobile apps send one key per report | |
 | F-13 | **Finding was wrong** | `FleetService.record` already deletes pings older than 7 days (`KEEP_HISTORY`) on every ingest, so the table does not grow without bound | That delete runs on every fix; if it ever shows in profiles, run it once a minute instead. |
 | F-14 | Fixed | Partial unique index `uq_work_order_live_per_incident`, `get_locked()` on the work-order read, the race now returns a clear 400 | Row locks only act on Postgres; on SQLite the file lock serialises writers anyway. |
@@ -98,10 +98,10 @@ Every row below was worked on; the table in section 2 is kept as it was found so
 | F-03 | `db.py:14-17` | `database is locked` 500s and unenforced foreign keys | SQLite connection has no `PRAGMA foreign_keys=ON`, no WAL, no `busy_timeout`; API threads and the worker thread write concurrently | Random 500s under any concurrent write; orphan rows (e.g. after city merge `routes_ops.py:427`) with no error | 8 | 7 | 6 | **336** | `check_same_thread=False` only | Pragmas on connect (Fix 5); use Postgres for anything shared |
 | F-04 | `storage.py:229-233`, `jobs.py:346-349` | Total photo loss / job loss on restart | Defaults are `memory` for both storage and queue. A deployment that forgets two env vars keeps `media_assets` rows in the DB but the bytes only in RAM | All evidence photos return "Photo file is missing from storage" (`routes_ops.py` media content 404) after the first restart; queued jobs vanish | 9 | 6 | 6 | **324** | `/system/status` shows the backend names (`api.py:461-467`) | Refuse in-memory backends when `CIVICLOOP_ENV=production` (Fix 3) |
 | F-05 | `api.py:180, 222-254`, `tenancy.py:52-55` | Platform-admin takeover by email squatting | Platform admin = `role == ADMIN and email in CIVICLOOP_PLATFORM_ADMINS`. Emails are never verified, and the first person to register a *new* city becomes its admin (`api.py:243-254`). If the listed email has not registered yet, anyone can register it into a new city and is instantly a platform admin | Full cross-city control: read/disable/merge/delete every city, impersonate any tenant with `X-Tenant-Id` | 10 | 4 | 8 | **320** | Env list is explicit; only matters before the real admin registers | Reserve those emails at registration (Fix 4) |
-| F-06 | `db.py:33-37`, `api.py:148`, `migrations/0001` | Schema drift on existing databases | `create_all` only creates missing *tables*, never new columns. Migrations 0002-0006 are not run by the app. This already happened in this project: the test DB lacked the new `route_plans.worker_id` columns until recreated | Production deploy of new code against an old DB → `no such column` 500s on first touch of the table | 8 | 8 | 5 | **320** | Guarded, idempotent migrations exist | Fail fast on revision mismatch in production (Fix 6) |
+| F-06 | `db.py:33-37`, `api.py:148`, `backend/migrations/0001` | Schema drift on existing databases | `create_all` only creates missing *tables*, never new columns. Migrations 0002-0006 are not run by the app. This already happened in this project: the test DB lacked the new `route_plans.worker_id` columns until recreated | Production deploy of new code against an old DB → `no such column` 500s on first touch of the table | 8 | 8 | 5 | **320** | Guarded, idempotent migrations exist | Fail fast on revision mismatch in production (Fix 6) |
 | F-07 | `jobs.py:~88` (`InMemoryJobQueue.retry`) | Whole job pipeline frozen for up to 5 minutes | `retry` does `time.sleep(delay_seconds)` inside the single worker thread; `retry_delay` goes up to 300 s (`jobs.py:155-158`) | One failing Gemini call blocks every other queued job (analysis for all cities) while the thread sleeps | 7 | 7 | 6 | **294** | Max 3 attempts (`jobs.py:186`) | Schedule the retry with a timer instead of sleeping (Fix 7) |
 | F-08 | `ai.py:102`, `worker.py:46` | Worker thread hung forever | `genai.Client(api_key=...)` is built with no HTTP timeout (the open-weight adapter has 30 s, `ai.py:158`). There is one worker thread | One stalled Gemini connection stops all background work and sync `POST /incidents/{id}/analysis` calls hold a request thread (`api.py:426`) | 8 | 5 | 7 | **280** | None for Gemini | Set `HttpOptions(timeout=30_000)` (Fix 7) |
-| F-09 | `tenancy.py:85-91, 131-136` | Tenant isolation fails open | The read filter only applies when `session.info["tenant_id"]` is set; `bind_tenant(session, None)` removes it. `/auth/me` does this on purpose (`routes_ops.py:351`) and the worker does for jobs with a null `tenant_id`. Any new route or job that forgets `bind_tenant` sees every city. Only SELECTs are filtered (`tenancy.py:132`), not bulk UPDATE/DELETE | One missed line = cross-city data leak | 9 | 3 | 8 | **216** | 7 cross-city tests (`tests/test_driver_routes.py`, tenancy tests) | Make "no tenant" an error for request sessions; add a test that walks every route as a Pune user |
+| F-09 | `tenancy.py:85-91, 131-136` | Tenant isolation fails open | The read filter only applies when `session.info["tenant_id"]` is set; `bind_tenant(session, None)` removes it. `/auth/me` does this on purpose (`routes_ops.py:351`) and the worker does for jobs with a null `tenant_id`. Any new route or job that forgets `bind_tenant` sees every city. Only SELECTs are filtered (`tenancy.py:132`), not bulk UPDATE/DELETE | One missed line = cross-city data leak | 9 | 3 | 8 | **216** | 7 cross-city tests (`backend/tests/test_driver_routes.py`, tenancy tests) | Make "no tenant" an error for request sessions; add a test that walks every route as a Pune user |
 | F-10 | `services/municipal_integration.py:66-77`, `routes_ops.py:1138` | Work-order state machine bypass | `import_status_updates` sets `order.status = WorkOrderStatus(update["status"])` for any valid status. No transition check, no incident update, no assignee check | A supervisor (or a bad import file) can mark a DRAFT order COMPLETED, or ASSIGNED with no driver; routes and dashboards then show wrong state; incident stays open | 7 | 5 | 6 | **210** | Audit event `status_imported` | Allow only real transitions (Fix 8) |
 | F-11 | `api.py:356`, `routes_ops.py` media content (`Response(... media_type=asset.content_type)`) | Stored file type is whatever the client claims | Only `content_type.startswith("image/")` is checked; bytes are never inspected, and `image/svg+xml` passes. The same type is echoed back | Non-images sent to the AI model (errors, wasted quota); SVG with script served from the API origin; no `nosniff` | 6 | 5 | 7 | **210** | Auth required to fetch; 10 MB cap | Sniff magic bytes, allow-list types (Fix 9) |
 | F-12 | `api.py:285-301` | Duplicate reports on retry | `POST /incidents` has no idempotency key. A phone that times out and retries creates two incidents (and two analyses, work orders, etc.) | Duplicate queue items for supervisors; reporter confusion | 5 | 7 | 6 | **210** | Duplicate-detection feature flags near matches later | `Idempotency-Key` header with unique index (Fix 10) |
@@ -216,7 +216,7 @@ None of these have been applied. Each shows the change I would make.
 
 ### 1. [Critical] Throttle and harden login and registration (F-01, F-15)
 
-Files: `civicloop/api.py:50-62, 277-283`, `civicloop/auth.py:108-116`.
+Files: `backend/civicloop/api.py:50-62, 277-283`, `backend/civicloop/auth.py:108-116`.
 
 Problem: unlimited password guesses and unbounded CPU use; unknown emails answer faster than known ones.
 
@@ -269,7 +269,7 @@ if user is None or not user.is_active or not ok:
 
 ### 2. [Critical] Make jobs recoverable (F-02)
 
-Files: `civicloop/repositories.py` (near line 411), `civicloop/worker.py:55-63`, `civicloop/jobs.py:222-226`.
+Files: `backend/civicloop/repositories.py` (near line 411), `backend/civicloop/worker.py:55-63`, `backend/civicloop/jobs.py:222-226`.
 
 Problem: a crash leaves jobs RUNNING forever or loses them from the queue.
 
@@ -306,7 +306,7 @@ Also make `JobWorker.run_once` skip a delivery whose job is already RUNNING, so 
 
 ### 3. [Critical] Refuse volatile storage and queue in production (F-04)
 
-File: `civicloop/api.py` after line 130.
+File: `backend/civicloop/api.py` after line 130.
 
 Problem: two forgotten environment variables silently lose every photo and queued job on restart.
 
@@ -321,7 +321,7 @@ if os.getenv("CIVICLOOP_ENV", "development").lower() == "production":
 
 ### 4. [Critical] Reserve platform-admin emails (F-05)
 
-File: `civicloop/api.py` after line 235 (once `caller_admin` is known).
+File: `backend/civicloop/api.py` after line 235 (once `caller_admin` is known).
 
 Problem: an unverified registration can claim a listed platform-admin address.
 
@@ -333,7 +333,7 @@ Bootstrap the first platform admin with a one-off CLI (`python -m civicloop.make
 
 ### 5. [High] SQLite pragmas (F-03)
 
-File: `civicloop/db.py:14-23`.
+File: `backend/civicloop/db.py:14-23`.
 
 Problem: no foreign keys, no write-ahead log, no wait on locks.
 
@@ -361,7 +361,7 @@ Run the full suite after enabling foreign keys; it may expose tests that rely on
 
 ### 6. [High] Fail fast on schema mismatch (F-06)
 
-Files: `civicloop/db.py` (new function), `civicloop/api.py:148`.
+Files: `backend/civicloop/db.py` (new function), `backend/civicloop/api.py:148`.
 
 Problem: new code on an old database fails at the first query that touches a new column.
 
@@ -381,7 +381,7 @@ In `lifespan`: `if production: assert_schema_current(engine) else: init_db(engin
 
 ### 7. [High] Stop the worker from stalling (F-07, F-08, F-18)
 
-Files: `civicloop/jobs.py:~88`, `civicloop/jobs.py:135-136`, `civicloop/ai.py:102`.
+Files: `backend/civicloop/jobs.py:~88`, `backend/civicloop/jobs.py:135-136`, `backend/civicloop/ai.py:102`.
 
 Problem: retries sleep inside the only worker thread; Gemini has no timeout; Redis retries spin.
 
@@ -411,7 +411,7 @@ client = genai.Client(api_key=api_key or os.environ.get("GEMINI_API_KEY"), http_
 
 ### 8. [High] Validate municipal status imports (F-10)
 
-File: `civicloop/services/municipal_integration.py:66-77`.
+File: `backend/civicloop/services/municipal_integration.py:66-77`.
 
 Problem: imported statuses overwrite the work-order state machine.
 
@@ -435,7 +435,7 @@ Return `skipped` too, and have `routes_ops.py:1138` include it in the response s
 
 ### 9. [High] Check what is actually uploaded (F-11)
 
-Files: `civicloop/api.py:356` and the verification upload (`routes_ops.py:945-955`), media content response in `routes_ops.py`.
+Files: `backend/civicloop/api.py:356` and the verification upload (`routes_ops.py:945-955`), media content response in `routes_ops.py`.
 
 Problem: any `image/*` label is trusted, including SVG.
 
@@ -460,7 +460,7 @@ And add `"X-Content-Type-Options": "nosniff"` to the headers in `media_content`.
 
 ### 10. [Medium] Bound inputs and make creating a report safe to retry (F-12, F-17, F-19, F-26, F-30)
 
-Files: `civicloop/api.py:50-72`, `civicloop/routes_ops.py:235, 239, 292, 302`, `civicloop/models.py` (Incident), a new migration `0007`.
+Files: `backend/civicloop/api.py:50-72`, `backend/civicloop/routes_ops.py:235, 239, 292, 302`, `backend/civicloop/models.py` (Incident), a new migration `0007`.
 
 ```python
 # api.py

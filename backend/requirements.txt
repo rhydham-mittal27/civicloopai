@@ -1,0 +1,14 @@
+# Everything the API needs in production. Render (and most hosts) install this with: pip install -r requirements.txt
+# Optional, for better duplicate detection on a host with at least 1 GB of memory: fastembed>=0.3
+SQLAlchemy>=2.0,<3.0
+fastapi>=0.115
+python-multipart>=0.0.9
+uvicorn>=0.30
+alembic>=1.13
+psycopg[binary]>=3.1
+google-genai>=1.0
+redis>=5.0
+boto3>=1.34
+numpy>=1.26
+scikit-learn>=1.4
+ortools>=9.9

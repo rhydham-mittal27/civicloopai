@@ -7,7 +7,7 @@ measured by us (`docs/ml_report/metrics.json`) or taken from a cited source, and
 | --- | --- | --- | --- |
 | 1 | `01_problem.png` | India collects 92% of its waste but processes only 54%, and 22% is unmanaged. Chandigarh collects everything, yet the national regulator's figures show about 15% processed and 90% landfilled. | CPCB annual report 2021-22 |
 | 2 | `02_loop.png` | One loop from report to verified cleanup. Software suggests at four steps; people decide or act at the other three. | Our design |
-| 3 | `03_lifecycle.png` | A report cannot be marked closed by hand. Approval, progress and verification only come from their own flows, and every step is logged. | `civicloop/api.py`, `services/verification.py` |
+| 3 | `03_lifecycle.png` | A report cannot be marked closed by hand. Approval, progress and verification only come from their own flows, and every step is logged. | `backend/civicloop/api.py`, `services/verification.py` |
 | 4 | `04_architecture.png` | One role-gated, city-scoped API in front of four small engines that can each be swapped. | Our code |
 | 5 | `05_tenancy.png` | Each city is a separate workspace with its own people, data and risk model. A platform admin confirms real cities. | 18 isolation tests |
 | 6 | `06_routes.png` | Planned rounds are 8 to 16% shorter than nearest-stop-next, and urgent sites come earlier in the round. | Our measurements, plus two outside studies for context |

@@ -14,7 +14,7 @@ Regenerate everything with `python scripts/ml_report.py`. Numbers are in `metric
 | Routes | Google OR-Tools, guided local search, seeded with nearest-neighbour | none (optimisation) | Random stop layouts | See below |
 | Cleanup check | Rule: job done and after-photo differs from before-photo | none | not measured | A real image check is not built |
 
-**There is no real dataset yet.** Everything trained or tested here is simulated or hand-written. The synthetic generator (`civicloop/synthetic.py`) simulates 120 hotspots with bursty, heavy-tailed recurrence over a year.
+**There is no real dataset yet.** Everything trained or tested here is simulated or hand-written. The synthetic generator (`backend/civicloop/synthetic.py`) simulates 120 hotspots with bursty, heavy-tailed recurrence over a year.
 
 ## Risk model
 

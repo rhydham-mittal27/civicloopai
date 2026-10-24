@@ -29,6 +29,10 @@ queue = [
     "redis>=5.0",
 ]
 
+postgres = [
+    "psycopg[binary]>=3.1",
+]
+
 migrations = [
     "alembic>=1.13",
 ]

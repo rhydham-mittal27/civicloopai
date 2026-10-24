@@ -18,7 +18,7 @@ A human-supervised waste-management workflow for Indian cities: report, understa
 
 **AI suggests. People decide. Nothing is closed without a photo.**
 
-[Quick start](#6-quick-start) · [Run on your phone](#63-use-the-phone-apps-without-deploying-anything) · [Architecture](#9-architecture) · [Security and reliability](#11-security-and-reliability) · [Honest limits](#17-honest-status-and-limits)
+[Quick start](#6-quick-start) · [Deploy the backend](backend/README.md#deploy-on-render) · [Run on your phone](#63-use-the-phone-apps-without-deploying-anything) · [Architecture](#9-architecture) · [Security and reliability](#11-security-and-reliability) · [Honest limits](#17-honest-status-and-limits)
 
 </div>
 
@@ -219,7 +219,8 @@ for real photo analysis. Everything else works without it.
 ```bash
 python -m venv .venv
 # Windows: .venv\Scripts\activate      macOS/Linux: source .venv/bin/activate
-pip install -e ".[api,ai,ml,migrations,queue,storage,dev]"
+cd backend
+pip install -e ".[api,ai,ml,migrations,queue,storage,postgres,dev]"     # or: pip install -r requirements.txt
 
 cp .env.example .env          # then edit: set GEMINI_API_KEY and a real CIVICLOOP_AUTH_SECRET
 uvicorn civicloop.api:app --host 127.0.0.1 --port 8000
@@ -232,6 +233,7 @@ The first run creates the SQLite database. For a shared database, set `CIVICLOOP
 claimed through the sign-up form, which is how the first platform admin is made:
 
 ```bash
+# from backend/
 CIVICLOOP_PLATFORM_ADMINS=admin@civic.test \
 CIVICLOOP_ADMIN_PASSWORD='admin-pass-12345' \
 python -m civicloop.make_admin --email admin@civic.test --name "Meera Admin" --city Chandigarh --pincode 160017
@@ -240,6 +242,7 @@ python -m civicloop.make_admin --email admin@civic.test --name "Meera Admin" --c
 **Load demo data** (clearly labelled as simulated or demo):
 
 ```bash
+# from backend/
 python -m civicloop.ml_tools seed --city Chandigarh      # 1,500 SIMULATED reports for training the risk model
 python -m civicloop.demo --city Chandigarh               # sites, work orders and two demo routes
 python -m civicloop.ml_tools train --city Chandigarh     # trains the risk model; deploys it only if it beats the formula
@@ -282,7 +285,7 @@ After that, only that city's admins can create supervisors, drivers and other ad
 The backend stays on your computer and the phone talks to it over Wi-Fi.
 
 1. Install **Expo Go** from the Play Store or App Store. You need Node 22 or newer on the computer.
-2. Start the backend so the phone can reach it: `uvicorn civicloop.api:app --host 0.0.0.0 --port 8000`.
+2. Start the backend so the phone can reach it: `cd backend && uvicorn civicloop.api:app --host 0.0.0.0 --port 8000`.
 3. Find your computer's address with `ipconfig` (Windows) or `ifconfig` (macOS/Linux), for example `192.168.1.20`.
 4. Allow port 8000 through the firewall, or the phone cannot connect.
 5. Start an app:
@@ -303,11 +306,11 @@ More detail, including what needs a development build instead of Expo Go: [`mobi
 
 ## 7. Configuration
 
-All settings are environment variables. `.env.example` documents every one.
+All settings are environment variables. [`backend/.env.example`](backend/.env.example) documents every one. To deploy the backend on Render, follow [`backend/README.md`](backend/README.md#deploy-on-render).
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `CIVICLOOP_DATABASE_URL` | `sqlite:///civicloop.db` | SQLite for development, PostgreSQL for production |
+| `CIVICLOOP_DATABASE_URL` | `sqlite:///civicloop.db` | SQLite for development, PostgreSQL for production (`postgres://` and `postgresql://` addresses from a host are accepted) |
 | `CIVICLOOP_AUTH_SECRET` | random per process (dev) | Signs sign-in tokens. **Required in production** (32+ characters). |
 | `CIVICLOOP_ENV` | `development` | `production` refuses to start without a secret, with in-memory storage or queue, or on an out-of-date database |
 | `CIVICLOOP_TOKEN_TTL_SECONDS` | `43200` | Sign-in lifetime (12 hours) |
@@ -317,7 +320,8 @@ All settings are environment variables. `.env.example` documents every one.
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | | Photo analysis with Gemini (default `gemini-2.5-flash`), with a 30 s timeout |
 | `OPEN_WEIGHT_ENDPOINT`, `OPEN_WEIGHT_MODEL` | | Any OpenAI-compatible server (vLLM, Ollama, ...) |
 | `CIVICLOOP_STORAGE_BACKEND` | `local` | `local`, `memory` or `s3` (also R2, MinIO). `memory` is refused in production. |
-| `CIVICLOOP_QUEUE_BACKEND` | `memory` | `redis` for a separate worker (`python -m civicloop.worker`). `memory` is refused in production. |
+| `CIVICLOOP_QUEUE_BACKEND` | `memory` | `redis` for a separate worker (`python -m civicloop.worker`). `memory` is refused in production unless `CIVICLOOP_ALLOW_SINGLE_PROCESS=1`. |
+| `CIVICLOOP_ALLOW_SINGLE_PROCESS` | unset | `1` lets one production API process use the in-process queue (jobs are re-queued from the database after a restart) |
 | `CIVICLOOP_MODEL_DIR` | `./var/models` | Trained risk models, one sub-folder per city |
 | `CIVICLOOP_EMBEDDINGS` | on | `off` skips the embedding model download |
 | `CIVICLOOP_PLATFORM_ADMINS` | empty | Comma-separated admin emails who can manage all cities (and cannot be claimed by sign-up) |
@@ -356,7 +360,7 @@ exercised as web builds. See "What needs a development build" in [`mobile/README
   Google Maps embed for road routes. A route handler proxies `/api/v1` and keeps the token in an httpOnly cookie.
 - **Phones:** Expo apps that talk to the API directly, with the token in the phone's secure storage.
 - **API:** FastAPI. Every route is role-checked and every database query is limited to the caller's city.
-- **Engines:** small, replaceable modules: photo analysis (`civicloop/ai.py`), duplicates (`embeddings.py`), risk (`risk_model.py`),
+- **Engines:** small, replaceable modules: photo analysis (`backend/civicloop/ai.py`), duplicates (`embeddings.py`), risk (`risk_model.py`),
   routing (`engines/routing.py`), rules (verification, priority, fleet).
 - **State:** SQLAlchemy models with foreign keys enforced, Alembic migrations, pluggable photo storage and job queue.
 - **Background work:** AI analysis runs off the request path, in-process by default or on Redis with a separate worker. A
@@ -366,7 +370,7 @@ exercised as web builds. See "What needs a development build" in [`mobile/README
 
 ![Tenancy](docs/pitch/05_tenancy.png)
 
-Every row belongs to a city. One rule in one place (`civicloop/tenancy.py`) filters every read and stamps every write, so no
+Every row belongs to a city. One rule in one place (`backend/civicloop/tenancy.py`) filters every read and stamps every write, so no
 route has to remember it. A request can never see or change another city's data, and **a request session cannot lift its city
 scope by accident** (cross-city routes use an explicit `lift_scope()`). Background jobs inherit the city of the report they work
 on, each city trains and deploys its own risk model, and photos are stored under a per-city prefix.
@@ -375,7 +379,7 @@ on, each city trains and deploys its own risk model, and photos are stored under
 - **Unconfirmed cities** work normally but are kept out of the public suggestions until a platform admin confirms them or merges
   a misspelling into the right one. A city must be **switched off before it can be merged**.
 - **Platform admins** get a Cities page and a "Working in" switcher. A city always keeps at least one active administrator.
-- The isolation is covered by dedicated tests (`tests/test_tenancy.py`, `tests/test_driver_routes.py`).
+- The isolation is covered by dedicated tests (`backend/tests/test_tenancy.py`, `backend/tests/test_driver_routes.py`).
 
 ## 11. Security and reliability
 
@@ -424,7 +428,7 @@ Where each collection vehicle is, from a crew phone or a hardware GPS tracker.
 
 ![Live tracking](docs/pitch2/08_live_tracking.png)
 
-**Status:** built end to end. The API and plausibility checks are covered by `tests/test_fleet.py`, the pages by the browser suite.
+**Status:** built end to end. The API and plausibility checks are covered by `backend/tests/test_fleet.py`, the pages by the browser suite.
 
 - **Live fleet page** (`/fleet`, supervisors and admins): every vehicle on a map, a list sorted by state, and a summary (moving,
   stopped, weak or offline, km today). Click a vehicle to centre on it, see its last hour as a trail, change its driver, switch it
@@ -469,7 +473,8 @@ Interactive docs are served by FastAPI at `/docs`. Everything is under `/api/v1`
 ## 15. Testing
 
 ```bash
-pytest -q                          # 121 backend tests (see below)
+cd backend && python -m pytest -q  # 123 backend tests (see below)
+cd ..
 cd frontend
 npm run lint && npx tsc --noEmit
 npm run e2e                        # Playwright journey across all roles; see the note below
@@ -480,7 +485,7 @@ npm run typecheck
 
 | Layer | What is covered |
 | --- | --- |
-| Backend (121) | Auth and roles, the cleanup loop, ML, dashboard, tenancy, fleet, **driver routes** (7), and **hardening** (27): throttling, token revocation, reserved admin emails, production guards, job recovery, SQLite settings, tenant scope, import rules, one live order per incident, upload checks, retry-safe reports, bounded inputs, tracker rate limit, and that the migrations build a database the code accepts |
+| Backend (123) | Auth and roles, the cleanup loop, ML, dashboard, tenancy, fleet, **driver routes** (7), and **hardening** (27): throttling, token revocation, reserved admin emails, production guards, job recovery, SQLite settings, tenant scope, import rules, one live order per incident, upload checks, retry-safe reports, bounded inputs, tracker rate limit, and that the migrations build a database the code accepts |
 | Phone apps | Unit tests for the client and helpers; contract tests against a live backend; Android, iOS and web bundles |
 | Browser | Signs in as every role, walks the cleanup loop on a throwaway backend, checks every page for horizontal scroll on a phone, and fails on console or server errors |
 
@@ -493,22 +498,24 @@ Regenerate screenshots with `node e2e/screenshots.mjs ../docs/screenshots`.
 ## 16. Project layout
 
 ```
-civicloop/                 backend package
-  api.py                   app factory, auth, throttling, registration, incidents, media
-  routes_ops.py            role-gated operations routes (work orders, routes, review, dashboard, admin, platform)
-  routes_fleet.py          live vehicle tracking routes (supervisor, crew phone, GPS tracker)
-  tenancy.py               per-city read filter, write stamping, lift_scope
-  auth.py  images.py  db.py  models.py  repositories.py
-  services/                one service per domain (incident, work_order, route_planning, fleet, dashboard, ...)
-  engines/                 deterministic engines: routing (OR-Tools + greedy), duplicates, risk formula
-  ai.py  embeddings.py  risk_model.py  synthetic.py  ml_tools.py
-  jobs.py  worker.py  job_handlers.py   background queue, worker and crash recovery
-  make_admin.py            create the first administrator
-  demo.py  gps_sim.py      demo data and the GPS simulator
-migrations/                Alembic revisions 0001 to 0007
-tests/                     pytest suite (121 tests)
-mobile/                    Expo apps: apps/resident, apps/crew, shared packages/ (core, ui, features)
+backend/                   the API, deployable on its own (see backend/README.md)
+  civicloop/               application package
+    api.py                 app factory, auth, throttling, registration, incidents, media
+    routes_ops.py          role-gated operations routes (work orders, routes, review, dashboard, admin, platform)
+    routes_fleet.py        live vehicle tracking routes (supervisor, crew phone, GPS tracker)
+    tenancy.py             per-city read filter, write stamping, lift_scope
+    auth.py  images.py  db.py  models.py  repositories.py
+    services/              one service per domain (incident, work_order, route_planning, fleet, dashboard, ...)
+    engines/               deterministic engines: routing (OR-Tools + greedy), duplicates, risk formula
+    ai.py  embeddings.py  risk_model.py  synthetic.py  ml_tools.py
+    jobs.py  worker.py  job_handlers.py     background queue, worker and crash recovery
+    make_admin.py          create the first administrator
+    demo.py  gps_sim.py    demo data and the GPS simulator
+  migrations/              Alembic revisions 0001 to 0007
+  tests/                   pytest suite (123 tests)
+  requirements.txt  pyproject.toml  alembic.ini  .env.example  .python-version
 frontend/                  Next.js app (src/app pages, api/v1 proxy route, src/components incl. map/, src/lib, e2e/)
+mobile/                    Expo apps: apps/resident, apps/crew, shared packages/ (core, ui, features)
 scripts/                   ml_report.py, pitch_figures*.py, pitch2_figures.py, record_demo.py
 docs/                      FMEA, ML report, screenshots, mobile screens, pitch (v1) and pitch2 (v2) slides
 ```

@@ -7,7 +7,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from civicloop import models  # noqa: F401
-from civicloop.db import Base
+from civicloop.db import Base, normalise_database_url
 
 config = context.config
 if config.config_file_name is not None:
@@ -15,7 +15,7 @@ if config.config_file_name is not None:
 
 database_url = os.getenv("CIVICLOOP_DATABASE_URL")
 if database_url:
-    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+    config.set_main_option("sqlalchemy.url", normalise_database_url(database_url).replace("%", "%%"))
 
 target_metadata = Base.metadata
 
